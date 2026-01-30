@@ -11,14 +11,6 @@ function getEnvVar(key: string, defaultValue?: string): string {
   return value || defaultValue || '';
 }
 
-function getEnvVarRequired(key: string): string {
-  const value = process.env[key];
-  if (!value) {
-    throw new Error(`❌ Required environment variable missing: ${key}`);
-  }
-  return value;
-}
-
 export const config = {
   // App
   version: '3.0.0',
