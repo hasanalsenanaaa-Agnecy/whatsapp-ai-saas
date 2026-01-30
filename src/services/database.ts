@@ -1,5 +1,4 @@
 import postgres from 'postgres';
-import { config } from '../config.js';
 import type { UserState, LeadData } from '../types.js';
 
 // ============================================================
