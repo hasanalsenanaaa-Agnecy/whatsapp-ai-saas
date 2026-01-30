@@ -95,10 +95,23 @@ async function getUserState(phone: string): Promise<UserState> {
   // Try database first
   if (isDatabaseAvailable()) {
     const dbState = await getDbState(phone);
-    if (dbState) return dbState;
+    if (dbState) {
+      // Validate state integrity
+      if (typeof dbState.data !== 'object' || dbState.data === null) {
+        dbState.data = {};
+      }
+      if (!Array.isArray(dbState.conversationHistory)) {
+        dbState.conversationHistory = [];
+      }
+      if (typeof dbState.step !== 'number' || dbState.step < 0 || dbState.step > 999) {
+        dbState.step = 0;
+        dbState.leadCaptured = false;
+      }
+      return dbState;
+    }
   }
   
-  // Fallback to memory
+  // Fallback to memory or create new
   let state = userState.get(phone);
   
   if (!state) {
@@ -108,6 +121,7 @@ async function getUserState(phone: string): Promise<UserState> {
   
   return state;
 }
+  
 
 async function saveUserState(phone: string, state: UserState): Promise<void> {
   state.updatedAt = Date.now();
