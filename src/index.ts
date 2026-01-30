@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { transcribeVoiceNote } from './services/voice.js';
 import { 
   initDatabase, 
@@ -7,7 +8,6 @@ import {
   saveLead,
   isDatabaseAvailable 
 } from './services/database.js';
-import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
@@ -15,7 +15,6 @@ import { sendWhatsAppMessage } from './services/whatsapp.js';
 import { initGoogleSheets, saveLeadToSheet } from './services/googleSheets.js';
 import { generateAIResponse } from './services/ai.js';
 import { config } from './config.js';
-import { initDatabase, getUserState as getDbState, saveUserState as saveDbState, deleteUserState as deleteDbState, saveLead, isDatabaseAvailable } from './services/database.js';
 import type { UserState, LeadData, ConversationMessage } from './types.js';
 
 // ============================================================
@@ -333,7 +332,7 @@ fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
 // ============================================================
 
 async function handleConversation(phone: string, message: string, clientId: string): Promise<void> {
-  const state = await getUserState(customerPhone);
+  const state = await getUserState(phone);
   const lowerMessage = message.toLowerCase();
   
   fastify.log.info({
@@ -346,7 +345,7 @@ async function handleConversation(phone: string, message: string, clientId: stri
   // Handle restart command
   if (lowerMessage === 'restart' || lowerMessage === 'reset') {
     userState.delete(phone);
-    const newState = getUserState(phone);
+    const newState = await getUserState(phone);
     await sendWelcomeMessage(phone, newState);
     return;
   }
@@ -514,7 +513,7 @@ GUIDELINES:
     
   } catch (err) {
     fastify.log.error({ err, phone }, 'AI generation failed');
-    await sendWhatsAppMessage(phone, MESSAGES.aiFallback(state.data.city));
+    await sendWhatsAppMessage(phone, MESSAGES.aiFallback(state.data.city || "Saudi Arabia"));
   }
 }
 
