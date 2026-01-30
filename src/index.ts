@@ -397,7 +397,7 @@ async function handleConversation(phone: string, message: string, clientId: stri
 async function sendWelcomeMessage(phone: string, state: UserState): Promise<void> {
   await sendWhatsAppMessage(phone, MESSAGES.welcome);
   state.step = 1;
-  await await await await await await await await await await await await await saveUserState(phone, state);
+  await saveUserState(phone, state);
   fastify.log.info({ phone }, '🆕 Welcome sent');
 }
 
@@ -497,7 +497,7 @@ async function handleLeadCapture(phone: string, message: string, state: UserStat
   }
 
   await sendWhatsAppMessage(phone, response);
-  await await await await await await await await await await await await saveUserState(phone, state);
+  await saveUserState(phone, state);
 }
 
 // ============================================================
@@ -538,7 +538,7 @@ GUIDELINES:
     }
 
     await sendWhatsAppMessage(phone, aiResponse);
-    await await await await await await await await await await await await saveUserState(phone, state);
+    await saveUserState(phone, state);
     fastify.log.info({ phone }, '🤖 AI response sent');
     
   } catch (err) {

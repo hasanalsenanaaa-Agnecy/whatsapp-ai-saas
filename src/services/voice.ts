@@ -16,7 +16,7 @@ export async function transcribeVoiceNote(audioUrl: string, accessToken: string)
     const file = new File([audioBuffer], 'audio.ogg', { type: 'audio/ogg' });
     
     // Transcribe with Whisper
-    const transcription = await openai.audio.transcriptions.create({
+    const transcription = await openai!.audio.transcriptions.create({
       file: file,
       model: 'whisper-1',
       language: 'ar' // Arabic - also handles English
