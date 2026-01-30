@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import { logError, safeExecute, sanitizeInput } from './services/errorHandler.js';
+import { checkRateLimit, isConversationExpired } from './services/rateLimiter.js';
+import { isWithinBusinessHours, getOutOfHoursMessage } from './services/businessHours.js';
 import { transcribeVoiceNote } from './services/voice.js';
 import { 
   initDatabase, 
@@ -549,3 +552,31 @@ const start = async (): Promise<void> => {
 };
 
 start();
+
+// ============================================================
+// ADMIN API ENDPOINTS
+// ============================================================
+
+fastify.get('/admin/stats', async (request, reply) => {
+  const auth = request.headers.authorization;
+  if (auth !== `Bearer ${process.env.ADMIN_API_KEY}`) {
+    return reply.code(401).send({ error: 'Unauthorized' });
+  }
+  
+  return {
+    activeConversations: userState.size,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  };
+});
+
+fastify.get('/admin/leads', async (request, reply) => {
+  const auth = request.headers.authorization;
+  if (auth !== `Bearer ${process.env.ADMIN_API_KEY}`) {
+    return reply.code(401).send({ error: 'Unauthorized' });
+  }
+  
+  const { getLeads } = await import('./services/database.js');
+  const leads = await getLeads(100);
+  return { count: leads.length, leads };
+});
