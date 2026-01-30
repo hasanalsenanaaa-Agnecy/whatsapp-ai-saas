@@ -1,10 +1,20 @@
-import 'dotenv/config';import Fastify from 'fastify';
+import { 
+  initDatabase, 
+  getUserState as getDbState, 
+  saveUserState as saveDbState,
+  deleteUserState as deleteDbState,
+  saveLead,
+  isDatabaseAvailable 
+} from './services/database.js';
+import 'dotenv/config';
+import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { sendWhatsAppMessage } from './services/whatsapp.js';
 import { initGoogleSheets, saveLeadToSheet } from './services/googleSheets.js';
 import { generateAIResponse } from './services/ai.js';
 import { config } from './config.js';
+import { initDatabase, getUserState as getDbState, saveUserState as saveDbState, deleteUserState as deleteDbState, saveLead, isDatabaseAvailable } from './services/database.js';
 import type { UserState, LeadData, ConversationMessage } from './types.js';
 
 // ============================================================
@@ -47,7 +57,7 @@ setInterval(() => {
   let cleaned = 0;
   
   userState.forEach((state, phone) => {
-    if (now - state.createdAt > STATE_EXPIRY_TTL) {
+    if (now - state.createdAt > STATE_EXPIRY_TTL) 
       userState.delete(phone);
       cleaned++;
     }

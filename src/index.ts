@@ -1,3 +1,12 @@
+import { transcribeVoiceNote } from './services/voice.js';
+import { 
+  initDatabase, 
+  getUserState as getDbState, 
+  saveUserState as saveDbState,
+  deleteUserState as deleteDbState,
+  saveLead,
+  isDatabaseAvailable 
+} from './services/database.js';
 import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
@@ -6,6 +15,7 @@ import { sendWhatsAppMessage } from './services/whatsapp.js';
 import { initGoogleSheets, saveLeadToSheet } from './services/googleSheets.js';
 import { generateAIResponse } from './services/ai.js';
 import { config } from './config.js';
+import { initDatabase, getUserState as getDbState, saveUserState as saveDbState, deleteUserState as deleteDbState, saveLead, isDatabaseAvailable } from './services/database.js';
 import type { UserState, LeadData, ConversationMessage } from './types.js';
 
 // ============================================================
@@ -27,6 +37,7 @@ await fastify.register(rateLimit, {
 });
 
 // Initialize external services
+await initDatabase();
 await initGoogleSheets();
 
 // ============================================================
@@ -74,7 +85,14 @@ function createNewState(): UserState {
   };
 }
 
-function getUserState(phone: string): UserState {
+async function getUserState(phone: string): Promise<UserState> {
+  // Try database first
+  if (isDatabaseAvailable()) {
+    const dbState = await getDbState(phone);
+    if (dbState) return dbState;
+  }
+  
+  // Fallback to memory
   let state = userState.get(phone);
   
   if (!state) {
@@ -85,9 +103,16 @@ function getUserState(phone: string): UserState {
   return state;
 }
 
-function saveUserState(phone: string, state: UserState): void {
+async function saveUserState(phone: string, state: UserState): Promise<void> {
   state.updatedAt = Date.now();
+  
+  // Save to memory
   userState.set(phone, state);
+  
+  // Save to database
+  if (isDatabaseAvailable()) {
+    await saveDbState(phone, state);
+  }
 }
 
 // ============================================================
@@ -265,11 +290,10 @@ fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
   processedMessages.add(messageId);
   setTimeout(() => processedMessages.delete(messageId), MESSAGE_DEDUP_TTL);
 
-  // Handle text messages only (for now)
+  // Handle text messages
   if (messageType === 'text' && message.text?.body) {
     const userMessage = message.text.body.trim();
     
-    // Process asynchronously - don't block webhook response
     setImmediate(() => {
       handleConversation(customerPhone, userMessage, clientId).catch(err => {
         fastify.log.error({ err, customerPhone }, 'Error processing message');
@@ -277,7 +301,30 @@ fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
     });
   }
   
-  // Always return 200 quickly (Meta requirement)
+  // Handle voice notes
+  if (messageType === 'audio' && message.audio?.id) {
+    const mediaId = message.audio.id;
+    const mediaUrl = `https://graph.facebook.com/v21.0/${mediaId}`;
+    
+    setImmediate(async () => {
+      try {
+        // Get media URL
+        const mediaResponse = await fetch(mediaUrl, {
+          headers: { 'Authorization': `Bearer ${config.whatsapp.accessToken}` }
+        });
+        const mediaData = await mediaResponse.json() as { url: string };
+        
+        // Transcribe
+        const transcription = await transcribeVoiceNote(mediaData.url, config.whatsapp.accessToken);
+        
+        if (transcription) {
+          await handleConversation(customerPhone, transcription, clientId);
+        }
+      } catch (err) {
+        fastify.log.error({ err, customerPhone }, 'Error processing voice note');
+      }
+    });
+  }
   return reply.code(200).send({ status: 'received' });
 });
 
@@ -286,7 +333,7 @@ fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
 // ============================================================
 
 async function handleConversation(phone: string, message: string, clientId: string): Promise<void> {
-  const state = getUserState(phone);
+  const state = await getUserState(customerPhone);
   const lowerMessage = message.toLowerCase();
   
   fastify.log.info({
@@ -321,7 +368,7 @@ async function handleConversation(phone: string, message: string, clientId: stri
 async function sendWelcomeMessage(phone: string, state: UserState): Promise<void> {
   await sendWhatsAppMessage(phone, MESSAGES.welcome);
   state.step = 1;
-  saveUserState(phone, state);
+  await await await await await await await await await await await await await saveUserState(phone, state);
   fastify.log.info({ phone }, '🆕 Welcome sent');
 }
 
@@ -421,7 +468,7 @@ async function handleLeadCapture(phone: string, message: string, state: UserStat
   }
 
   await sendWhatsAppMessage(phone, response);
-  saveUserState(phone, state);
+  await await await await await await await await await await await await saveUserState(phone, state);
 }
 
 // ============================================================
@@ -462,7 +509,7 @@ GUIDELINES:
     }
 
     await sendWhatsAppMessage(phone, aiResponse);
-    saveUserState(phone, state);
+    await await await await await await await await await await await await saveUserState(phone, state);
     fastify.log.info({ phone }, '🤖 AI response sent');
     
   } catch (err) {
