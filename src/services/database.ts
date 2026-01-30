@@ -90,16 +90,16 @@ export async function getUserState(phone: string): Promise<UserState | null> {
       SELECT * FROM user_states WHERE phone = ${phone}
     `;
 
-    if (result.length === 0) return null;
+    if (result.length === 0 || !result[0]) return null;
 
     const row = result[0];
     return {
-      step: row.step,
-      data: row.data,
-      leadCaptured: row.lead_captured,
-      conversationHistory: row.conversation_history,
-      createdAt: new Date(row.created_at).getTime(),
-      updatedAt: new Date(row.updated_at).getTime()
+      step: row.step ?? 0,
+      data: typeof row.data === 'string' ? JSON.parse(row.data) : (row.data ?? {}),
+      leadCaptured: row.lead_captured ?? false,
+      conversationHistory: typeof row.conversation_history === 'string' ? JSON.parse(row.conversation_history) : (row.conversation_history ?? []),
+      createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+      updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now()
     };
 
   } catch (error) {
