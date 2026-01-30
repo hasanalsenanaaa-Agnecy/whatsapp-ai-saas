@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { logError, safeExecute, sanitizeInput } from './services/errorHandler.js';
 import { checkRateLimit, isConversationExpired } from './services/rateLimiter.js';
 import { isWithinBusinessHours, getOutOfHoursMessage } from './services/businessHours.js';
+import { initQueueWorker, addToQueue, messageQueue } from './services/queue.js';
 import { transcribeVoiceNote } from './services/voice.js';
 import { 
   initDatabase, 
@@ -41,6 +42,9 @@ await fastify.register(rateLimit, {
 // Initialize external services
 await initDatabase();
 await initGoogleSheets();
+initQueueWorker(async (data) => {
+  await handleConversation(data.phone, data.message, data.clientId);
+});
 
 // ============================================================
 // STATE MANAGEMENT
@@ -335,6 +339,15 @@ fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
 // ============================================================
 
 async function handleConversation(phone: string, message: string, clientId: string): Promise<void> {
+  // Rate limit check
+  if (!checkRateLimit(phone)) {
+    await sendWhatsAppMessage(phone, '⚠️ Too many messages. Please wait a minute.');
+    return;
+  }
+
+  // Sanitize input
+  message = sanitizeInput(message);
+  if (!message) return;
   const state = await getUserState(phone);
   const lowerMessage = message.toLowerCase();
   
