@@ -1,8 +1,3 @@
-// ============================================================
-// CENTRALIZED CONFIGURATION
-// ============================================================
-// All environment variables and settings in one place
-
 function getEnvVar(key: string, defaultValue?: string): string {
   const value = process.env[key];
   if (!value && defaultValue === undefined) {
@@ -18,9 +13,15 @@ export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   logLevel: process.env.LOG_LEVEL || 'info',
 
-  // Business
-  agencyName: getEnvVar('AGENCY_NAME', 'Your Real Estate Agency'),
-  agentPhone: getEnvVar('AGENT_PHONE_NUMBER', '966563057345'),
+  // Business (Customizable per client)
+  agencyName: getEnvVar('AGENCY_NAME', 'Real Estate Agency'),
+  agentPhone: getEnvVar('AGENT_PHONE_NUMBER', '966500000000'),
+  
+  // Property options (comma-separated in env)
+  propertyTypes: getEnvVar('PROPERTY_TYPES', 'Villa,Apartment,Land,Commercial').split(','),
+  cities: getEnvVar('CITIES', 'Riyadh,Jeddah,Dammam,Khobar,Other').split(','),
+  budgets: getEnvVar('BUDGETS', 'Under 500K SAR,500K-1M SAR,1M-2M SAR,Above 2M SAR').split(','),
+  bedrooms: getEnvVar('BEDROOMS', '1-2,3-4,5-6,7+').split(','),
 
   // WhatsApp API
   whatsapp: {
@@ -43,32 +44,17 @@ export const config = {
     credentials: process.env.GOOGLE_CREDENTIALS || null,
     credentialsPath: './google-credentials.json',
     sheetName: getEnvVar('GOOGLE_SHEET_NAME', 'Sheet1')
-  },
-
-  // Rate Limiting
-  rateLimit: {
-    maxRequests: 100,
-    windowMs: 60 * 1000 // 1 minute
   }
 } as const;
 
-// Validate critical config on startup
 export function validateConfig(): void {
   const missing: string[] = [];
-
   if (!config.whatsapp.phoneNumberId) missing.push('WHATSAPP_PHONE_NUMBER_ID');
   if (!config.whatsapp.accessToken) missing.push('WHATSAPP_ACCESS_TOKEN');
-  if (!config.anthropic.apiKey) missing.push('ANTHROPIC_API_KEY');
-
   if (missing.length > 0) {
-    console.error('❌ Missing required environment variables:', missing.join(', '));
-    console.error('Please check your .env file or environment configuration.');
-    
-    if (!config.isDev) {
-      process.exit(1);
-    }
+    console.error('❌ Missing required:', missing.join(', '));
+    if (!config.isDev) process.exit(1);
   }
 }
 
-// Run validation
 validateConfig();
