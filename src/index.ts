@@ -4,17 +4,14 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { sendWhatsAppMessage } from './services/whatsapp.js';
 import { initGoogleSheets, saveLeadToSheet } from './services/googleSheets.js';
-import { generateAIResponse } from './services/ai.js';
 import { config } from './config.js';
 import { sanitizeInput } from './services/errorHandler.js';
 import { checkRateLimit } from './services/rateLimiter.js';
-import { isWithinBusinessHours, getOutOfHoursMessage } from './services/businessHours.js';
 import { transcribeVoiceNote } from './services/voice.js';
 import { 
   initDatabase, 
   getUserState as getDbState, 
   saveUserState as saveDbState,
-  deleteUserState as deleteDbState,
   saveLead,
   isDatabaseAvailable 
 } from './services/database.js';
@@ -34,7 +31,6 @@ const fastify = Fastify({
 await fastify.register(cors, { origin: true });
 await fastify.register(rateLimit, { max: 100, timeWindow: '1 minute' });
 
-// Initialize services
 await initDatabase();
 await initGoogleSheets();
 
@@ -47,9 +43,7 @@ const processedMessages = new Set<string>();
 
 const MESSAGE_DEDUP_TTL = 5 * 60 * 1000;
 const STATE_EXPIRY_TTL = 24 * 60 * 60 * 1000;
-const MAX_CONVERSATION_HISTORY = 20;
 
-// Cleanup expired states hourly
 setInterval(() => {
   const now = Date.now();
   let cleaned = 0;
@@ -171,7 +165,7 @@ How many bedrooms do you need?
 
 Please reply with a number (1-4)`,
 
-  askContact: (data: Partial<LeadData>) => `Perfect! ��️
+  askContact: (data: Partial<LeadData>) => `Perfect! 🛏️
 
 Here's what you're looking for:
 
@@ -190,9 +184,7 @@ Example: Ahmed Ali, 0501234567, ahmed@email.com`,
 
   thankYou: (name: string) => `Thank you, ${name}! 🎉
 
-Our agent will contact you within 2 hours.
-
-Feel free to ask me any questions about real estate! 😊`,
+Our agent will contact you within 2 hours.`,
 
   invalidInput: (options: string) => `❌ Please reply with a valid number (${options})`,
 
@@ -210,9 +202,7 @@ Feel free to ask me any questions about real estate! 😊`,
 
 ⏰ ${new Date().toLocaleString('en-SA', { timeZone: 'Asia/Riyadh' })}`,
 
-  aiFallback: (city: string) => `Thank you! Our agent will contact you soon about properties in ${city || 'Saudi Arabia'}.`,
-
-  error: 'Something went wrong. Type "restart" to start over.'
+  error: 'Something went wrong. Please try again.'
 };
 
 // ============================================================
@@ -231,7 +221,6 @@ fastify.get('/health', async () => ({
   activeUsers: userState.size
 }));
 
-// Webhook verification
 fastify.get('/webhook/whatsapp/:clientId', async (request, reply) => {
   const query = request.query as Record<string, string>;
   if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === config.whatsapp.verifyToken) {
@@ -241,7 +230,6 @@ fastify.get('/webhook/whatsapp/:clientId', async (request, reply) => {
   return reply.code(403).send('Forbidden');
 });
 
-// Webhook receiver
 fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
   const payload = request.body as any;
   const message = payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
@@ -250,14 +238,12 @@ fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
 
   const { id: messageId, from: customerPhone, type: messageType } = message;
 
-  // Deduplication
   if (processedMessages.has(messageId)) {
     return reply.code(200).send({ status: 'duplicate' });
   }
   processedMessages.add(messageId);
   setTimeout(() => processedMessages.delete(messageId), MESSAGE_DEDUP_TTL);
 
-  // Handle text
   if (messageType === 'text' && message.text?.body) {
     setImmediate(() => {
       handleConversation(customerPhone, message.text.body.trim()).catch(err => {
@@ -266,7 +252,6 @@ fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
     });
   }
   
-  // Handle voice
   if (messageType === 'audio' && message.audio?.id) {
     setImmediate(async () => {
       try {
@@ -293,40 +278,24 @@ fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
 // ============================================================
 
 async function handleConversation(phone: string, message: string): Promise<void> {
-  // Rate limit
   if (!checkRateLimit(phone)) {
     await sendWhatsAppMessage(phone, '⚠️ Too many messages. Please wait a minute.');
     return;
   }
 
-  // Sanitize
   message = sanitizeInput(message);
   if (!message) return;
-
-  // Business hours check (skip for restart command)
-  const lowerMessage = message.toLowerCase();
-  if (!isWithinBusinessHours() && lowerMessage !== 'restart' && lowerMessage !== 'reset') {
-    await sendWhatsAppMessage(phone, getOutOfHoursMessage());
-    return;
-  }
 
   const state = await getUserState(phone);
   
   fastify.log.info({ phone, step: state.step, leadCaptured: state.leadCaptured }, '📩 Message received');
 
-  // Restart command
-  if (lowerMessage === 'restart' || lowerMessage === 'reset') {
-    userState.delete(phone);
-    if (isDatabaseAvailable()) await deleteDbState(phone);
-    const newState = await getUserState(phone);
-    await sendWelcomeMessage(phone, newState);
+  // If lead already captured, ignore all messages
+  if (state.leadCaptured) {
     return;
   }
-
-  // Route
-  if (state.leadCaptured) {
-    await handleAIChat(phone, message, state);
-  } else if (state.step === 0) {
+  
+  if (state.step === 0) {
     await sendWelcomeMessage(phone, state);
   } else {
     await handleLeadCapture(phone, message, state);
@@ -413,7 +382,6 @@ async function handleLeadCapture(phone: string, message: string, state: UserStat
         timestamp: new Date().toISOString()
       };
 
-      // Save to both Sheets and Database
       await Promise.allSettled([
         saveLeadToSheet(leadData),
         saveLead(leadData),
@@ -422,10 +390,6 @@ async function handleLeadCapture(phone: string, message: string, state: UserStat
 
       state.leadCaptured = true;
       state.data = leadData;
-      state.conversationHistory.push({
-        role: 'assistant',
-        content: `Customer ${leadData.name} wants ${leadData.propertyType} in ${leadData.city}, budget ${leadData.budget}.`
-      });
 
       response = MESSAGES.thankYou(leadData.name);
       fastify.log.info({ phone, name: leadData.name }, '✅ Lead captured');
@@ -438,43 +402,6 @@ async function handleLeadCapture(phone: string, message: string, state: UserStat
 
   await sendWhatsAppMessage(phone, response);
   await saveUserState(phone, state);
-}
-
-// ============================================================
-// AI CHAT
-// ============================================================
-
-async function handleAIChat(phone: string, message: string, state: UserState): Promise<void> {
-  state.conversationHistory.push({ role: 'user', content: message });
-
-  const systemPrompt = `You are a real estate assistant for ${config.agencyName} in Saudi Arabia.
-
-Customer: ${state.data.name || 'Unknown'}
-Looking for: ${state.data.propertyType || 'property'} in ${state.data.city || 'Saudi Arabia'}
-Budget: ${state.data.budget || 'Not specified'}
-Bedrooms: ${state.data.bedrooms || 'Not specified'}
-
-Rules:
-- Be friendly and concise
-- Match customer's language (Arabic/English)
-- Don't ask for contact info again
-- Keep responses under 200 words`;
-
-  try {
-    const aiResponse = await generateAIResponse(systemPrompt, state.conversationHistory);
-    
-    state.conversationHistory.push({ role: 'assistant', content: aiResponse });
-    if (state.conversationHistory.length > MAX_CONVERSATION_HISTORY) {
-      state.conversationHistory = state.conversationHistory.slice(-MAX_CONVERSATION_HISTORY);
-    }
-
-    await sendWhatsAppMessage(phone, aiResponse);
-    await saveUserState(phone, state);
-    fastify.log.info({ phone }, '🤖 AI response sent');
-  } catch (err) {
-    fastify.log.error({ err, phone }, 'AI error');
-    await sendWhatsAppMessage(phone, MESSAGES.aiFallback(state.data.city || 'Saudi Arabia'));
-  }
 }
 
 // ============================================================
@@ -523,6 +450,7 @@ const start = async (): Promise<void> => {
 📡 Server: http://localhost:${config.port}
 🌍 Environment: ${config.isDev ? 'development' : 'production'}
 ✅ Database: ${isDatabaseAvailable() ? 'Connected' : 'Not available'}
+✅ 24/7 Mode: Always active
 ════════════════════════════════════════
     `);
   } catch (err) {
