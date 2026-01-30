@@ -375,6 +375,7 @@ async function handleConversation(phone: string, message: string, clientId: stri
   // Handle restart command
   if (lowerMessage === 'restart' || lowerMessage === 'reset') {
     userState.delete(phone);
+    if (isDatabaseAvailable()) await deleteDbState(phone);
     const newState = await getUserState(phone);
     await sendWelcomeMessage(phone, newState);
     return;
@@ -475,7 +476,7 @@ async function handleLeadCapture(phone: string, message: string, state: UserStat
 
       // Save and notify (parallel execution)
       await Promise.allSettled([
-        saveLeadToSheet(leadData).catch(err => fastify.log.error({ err }, 'Failed to save lead')),
+        saveLeadToSheet(leadData), saveLead(leadData).catch(err => fastify.log.error({ err }, 'Failed to save lead')),
         notifyAgent(leadData).catch(err => fastify.log.error({ err }, 'Failed to notify agent'))
       ]);
 
