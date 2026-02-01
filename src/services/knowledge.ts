@@ -1,12 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { config } from '../config.js';
 
 // ============================================================
 // KNOWLEDGE BASE AI SYSTEM
 // Answers only from provided data, admits when doesn't know
 // ============================================================
 
-const anthropic = process.env.ANTHROPIC_API_KEY 
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const anthropic = config.anthropic.apiKey
+  ? new Anthropic({ apiKey: config.anthropic.apiKey })
   : null;
 
 export interface KnowledgeItem {
@@ -82,8 +83,8 @@ export async function generateKnowledgeResponse(
 
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
+      model: config.anthropic.model,
+      max_tokens: Math.min(config.anthropic.maxTokens, 600),
       system: systemPrompt,
       messages: [
         { role: 'user', content: userMessage }

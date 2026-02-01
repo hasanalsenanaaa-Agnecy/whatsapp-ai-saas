@@ -715,6 +715,34 @@ export async function createAIFeedback(input: {
   }
 }
 
+export async function listAIFeedback(clientId: string, limit: number = 50): Promise<any[]> {
+  if (!sql) return [];
+
+  try {
+    const rows = await sql`
+      SELECT id, lead_id, conversation_id, user_message, ai_response, rating, comment, created_at
+      FROM ai_feedback
+      WHERE client_id = ${clientId}
+      ORDER BY created_at DESC
+      LIMIT ${limit}
+    `;
+
+    return rows.map((row: any) => ({
+      id: row.id,
+      leadId: row.lead_id,
+      conversationId: row.conversation_id,
+      userMessage: row.user_message,
+      aiResponse: row.ai_response,
+      rating: row.rating,
+      comment: row.comment,
+      createdAt: row.created_at
+    }));
+  } catch (error) {
+    console.error('❌ Error listing AI feedback:', error);
+    return [];
+  }
+}
+
 export function isDatabaseAvailable(): boolean {
   return sql !== null;
 }
