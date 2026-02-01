@@ -1,0 +1,57 @@
+ADD THESE IMPORTS AT THE TOP OF src/index.ts:
+
+import { initializeSecurity } from './security/init.js';
+import { registerAuthRoutes } from './routes/auth.routes.js';
+import { verifyWhatsAppWebhook } from './security/webhook-verification.js';
+import { logAudit, extractAuditInfo } from './security/audit.js';
+import { AppError, ErrorCode } from './security/error-handler.js';
+import { createRateLimitMiddleware } from './security/rate-limiter.js';
+import { createAPIKey, listAPIKeys, revokeAPIKey } from './security/api-key.js';
+import { getAuditLogs } from './security/audit.js';
+
+ADD THIS RIGHT AFTER await fastify.register(rateLimit, ...):
+
+// ============================================================
+// INITIALIZE SECURITY
+// ============================================================
+await initializeSecurity(fastify);
+
+ADD THIS ROUTE:
+
+await registerAuthRoutes(fastify);
+
+REPLACE YOUR WEBHOOK ROUTES WITH THIS:
+
+fastify.post<{ Body: any; Params: { clientId: string } }>(
+  '/webhook/whatsapp/:clientId',
+  { onRequest: [createRateLimitMiddleware('/webhook/whatsapp')] },
+  async (request: FastifyRequest, reply: FastifyReply) => {
+    const { clientId } = request.params as { clientId: string };
+    const signature = request.headers['x-hub-signature-256'] as string;
+
+    const client = await getClientByPhoneNumberId(clientId);
+    if (!client) {
+      throw new AppError(404, ErrorCode.NOT_FOUND, 'Client not found');
+    }
+
+    const body = JSON.stringify(request.body);
+    if (!verifyWhatsAppWebhook(body, signature, client.verify_token)) {
+      await logAudit({
+        clientId,
+        action: 'webhook_signature_verification_failed',
+        status: 'denied',
+        ...extractAuditInfo(request)
+      });
+
+      throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid webhook signature');
+    }
+
+    setImmediate(() => {
+      handleIncomingMessage(clientId, request.body, client.access_token).catch(err => {
+        console.error('❌ Error processing webhook:', err);
+      });
+    });
+
+    reply.code(200).send({ ok: true });
+  }
+);
