@@ -1,223 +1,166 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
-import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
+import { initializeSecurity } from './security/init.js';
+import { registerAuthRoutes } from './routes/auth.routes.js';
+import { registerClientRoutes } from './routes/clients.routes.js';
+import { registerAdminRoutes } from './routes/admin.routes.js';
+import { verifyWhatsAppWebhook } from './security/webhook-verification.js';
+import { logAudit, extractAuditInfo } from './security/audit.js';
+import { AppError, ErrorCode } from './security/error-handler.js';
+import { createRateLimitMiddleware } from './security/rate-limiter.js';
+import { createAPIKey, listAPIKeys, revokeAPIKey } from './security/api-key.js';
+import { getAuditLogs } from './security/audit.js';
+import { initializeDatabaseLayer, shutdownDatabaseLayer, checkDatabaseHealth } from './database/index.js';
+import { successResponse } from './api/response.js';
 import { initDatabase, isDatabaseAvailable, getClientByPhoneNumberId, getLeads, getClientStats } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
-import { transcribeVoiceNote } from './services/voice.js';
-import { generateDashboardHTML } from './dashboard.js';
-import { sanitizeInput } from './services/errorHandler.js';
-import { checkRateLimit } from './services/rateLimiter.js';
-
-// ============================================================
-// FASTIFY SETUP
-// ============================================================
 
 const fastify = Fastify({
   logger: {
     level: process.env.LOG_LEVEL || 'info',
     transport: process.env.NODE_ENV !== 'production' ? { target: 'pino-pretty' } : undefined
-  }
+  },
+  requestIdHeader: 'x-request-id'
 });
-
-await fastify.register(cors, { origin: true });
-await fastify.register(rateLimit, { max: 100, timeWindow: '1 minute' });
 
 await initDatabase();
 await initGoogleSheets();
+await fastify.register(rateLimit, { max: 100, timeWindow: '1 minute' });
+await initializeSecurity(fastify);
+await initializeDatabaseLayer();
+await registerAuthRoutes(fastify);
+await registerClientRoutes(fastify);
+await registerAdminRoutes(fastify);
 
-// ============================================================
-// DEDUPLICATION
-// ============================================================
-
-const processedMessages = new Set<string>();
-const MESSAGE_DEDUP_TTL = 5 * 60 * 1000;
-
-// ============================================================
-// ROUTES
-// ============================================================
-
-fastify.get('/', async () => ({
-  status: 'ok',
+fastify.get('/', async (r) => successResponse({
   service: 'WhatsApp AI SaaS',
   version: '4.0.0',
-  multiTenant: true
-}));
+  status: 'operational'
+}, { requestId: r.id }));
 
-fastify.get('/health', async () => ({
-  status: 'healthy',
-  timestamp: new Date().toISOString(),
-  database: isDatabaseAvailable() ? 'connected' : 'disconnected'
-}));
-
-// ============================================================
-// WEBHOOK (Multi-tenant)
-// ============================================================
+fastify.get('/health', async (r) => {
+  const db = await checkDatabaseHealth();
+  return successResponse({ status: 'healthy', database: db.status, uptime: process.uptime() }, { requestId: r.id });
+});
 
 fastify.get('/webhook/whatsapp/:clientId', async (request, reply) => {
-  const query = request.query as Record<string, string>;
-  const { clientId } = request.params as { clientId: string };
-  
-  // Get client to verify token
+  const { clientId } = request.params as any;
+  const query = request.query as any;
   const client = await getClientByPhoneNumberId(clientId);
-  const verifyToken = client?.verify_token || process.env.WHATSAPP_VERIFY_TOKEN || 'verify-token';
-  
-  if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === verifyToken) {
-    fastify.log.info(`✅ Webhook verified for client: ${clientId}`);
-    return reply.code(200).send(query['hub.challenge']);
+  if (!client) throw new AppError(404, ErrorCode.NOT_FOUND, 'Not found');
+  if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === client.verify_token) {
+    reply.send(query['hub.challenge']);
+  } else {
+    throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid token');
   }
-  
-  return reply.code(403).send('Forbidden');
 });
 
-fastify.post('/webhook/whatsapp/:clientId', async (request, reply) => {
-  const payload = request.body as any;
-  
-  // Extract data from webhook
-  const value = payload?.entry?.[0]?.changes?.[0]?.value;
-  const message = value?.messages?.[0];
-  const phoneNumberId = value?.metadata?.phone_number_id;
-  
-  if (!message || !phoneNumberId) {
-    return reply.code(200).send({ status: 'no_message' });
-  }
-
-  const { id: messageId, from: customerPhone, type: messageType } = message;
-
-  // Deduplication
-  if (processedMessages.has(messageId)) {
-    return reply.code(200).send({ status: 'duplicate' });
-  }
-  processedMessages.add(messageId);
-  setTimeout(() => processedMessages.delete(messageId), MESSAGE_DEDUP_TTL);
-
-  // Get client config
-  const client = await getClientByPhoneNumberId(phoneNumberId);
-  
-  if (!client) {
-    fastify.log.error(`❌ Unknown phone_number_id: ${phoneNumberId}`);
-    return reply.code(200).send({ status: 'unknown_client' });
-  }
-
-  // Rate limit per user
-  if (!checkRateLimit(customerPhone)) {
-    fastify.log.warn(`⚠️ Rate limited: ${customerPhone}`);
-    return reply.code(200).send({ status: 'rate_limited' });
-  }
-
-  // Handle text messages
-  if (messageType === 'text' && message.text?.body) {
-    const userMessage = sanitizeInput(message.text.body.trim());
-    
-    if (userMessage) {
-      setImmediate(() => {
-        handleIncomingMessage(phoneNumberId, customerPhone, userMessage, client.access_token)
-          .catch(err => fastify.log.error({ err, customerPhone }, 'Error processing message'));
-      });
-    }
-  }
-  
-  // Handle voice messages
-  if (messageType === 'audio' && message.audio?.id) {
-    setImmediate(async () => {
-      try {
-        const mediaUrl = `https://graph.facebook.com/v21.0/${message.audio.id}`;
-        const mediaResponse = await fetch(mediaUrl, {
-          headers: { 'Authorization': `Bearer ${client.access_token}` }
-        });
-        const mediaData = await mediaResponse.json() as { url: string };
-        
-        const transcription = await transcribeVoiceNote(mediaData.url, client.access_token);
-        
-        if (transcription) {
-          await handleIncomingMessage(phoneNumberId, customerPhone, transcription, client.access_token);
-        }
-      } catch (err) {
-        fastify.log.error({ err, customerPhone }, 'Error processing voice');
-      }
+fastify.post('/webhook/whatsapp/:clientId', { onRequest: [createRateLimitMiddleware('/webhook/whatsapp')] }, async (request, reply) => {
+  const { clientId } = request.params as any;
+  const signature = request.headers['x-hub-signature-256'] as string;
+  const client = await getClientByPhoneNumberId(clientId);
+  if (!client) throw new AppError(404, ErrorCode.NOT_FOUND, 'Not found');
+  const body = JSON.stringify(request.body);
+  if (!verifyWhatsAppWebhook(body, signature, client.verify_token)) {
+    await logAudit({
+      clientId,
+      action: 'webhook_signature_verification_failed',
+      status: 'denied',
+      ...extractAuditInfo(request)
     });
+    throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid signature');
   }
-
-  return reply.code(200).send({ status: 'received' });
-});
-
-// ============================================================
-// DASHBOARD (Multi-tenant)
-// ============================================================
-
-fastify.get('/dashboard/:clientId', async (request, reply) => {
-  const { clientId } = request.params as { clientId: string };
-  const { key } = request.query as { key: string };
-  
-  if (key !== process.env.ADMIN_API_KEY) {
-    return reply.code(401).send('Unauthorized. Add ?key=YOUR_ADMIN_KEY');
-  }
-
-  const stats = await getClientStats(clientId);
-  const leads = await getLeads(clientId, 50);
-
-  const html = generateDashboardHTML({
-    totalLeads: stats.totalLeads || 0,
-    leadsToday: stats.todayLeads || 0,
-    leadsThisWeek: stats.weekLeads || 0,
-    leadsByCity: {},
-    leadsByProperty: {},
-    recentLeads: leads.map(l => ({
-      name: l.name,
-      phone: l.phone,
-      propertyType: l.data?.interest || '-',
-      city: l.data?.preference || '-',
-      budget: l.data?.budget || '-',
-      timestamp: l.createdAt
-    }))
+  setImmediate(() => {
+    handleIncomingMessage(clientId, request.body, client.access_token).catch(err => {
+      console.error('Error:', err);
+    });
   });
-
-  reply.type('text/html');
-  return html;
+  reply.code(200).send({ ok: true });
 });
 
-// ============================================================
-// ADMIN API
-// ============================================================
+fastify.post('/api/clients/:clientId/api-keys', { onRequest: [fastify.authenticate] }, async (request: any, reply) => {
+  const { clientId } = request.params;
+  const user = request.user;
+  if (user.clientId !== clientId) throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
+  const { name } = request.body;
+  if (!name) throw new AppError(400, ErrorCode.INVALID_INPUT, 'Name required');
+  const result = await createAPIKey(clientId, name);
+  if (!result) throw new AppError(500, ErrorCode.INTERNAL_ERROR, 'Failed');
+  await logAudit({
+    clientId,
+    action: 'api_key_created',
+    resourceType: 'api_key',
+    resourceId: result.id,
+    status: 'success',
+    ...extractAuditInfo(request)
+  });
+  reply.code(201);
+  return successResponse({ id: result.id, key: result.key }, { requestId: request.id });
+});
 
-fastify.get('/admin/clients', async (request, reply) => {
-  if (request.headers.authorization !== `Bearer ${process.env.ADMIN_API_KEY}`) {
-    return reply.code(401).send({ error: 'Unauthorized' });
+fastify.get('/api/clients/:clientId/api-keys', { onRequest: [fastify.authenticate] }, async (request: any) => {
+  const { clientId } = request.params;
+  const user = request.user;
+  if (user.clientId !== clientId) throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
+  const keys = await listAPIKeys(clientId);
+  return successResponse(keys, { requestId: request.id });
+});
+
+fastify.delete('/api/clients/:clientId/api-keys/:keyId', { onRequest: [fastify.authenticate] }, async (request: any) => {
+  const { clientId, keyId } = request.params;
+  const user = request.user;
+  if (user.clientId !== clientId) throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
+  const success = await revokeAPIKey(keyId);
+  if (!success) throw new AppError(500, ErrorCode.INTERNAL_ERROR, 'Failed');
+  await logAudit({
+    clientId,
+    action: 'api_key_revoked',
+    resourceType: 'api_key',
+    resourceId: keyId,
+    status: 'success',
+    ...extractAuditInfo(request)
+  });
+  return successResponse({ message: 'Revoked' }, { requestId: request.id });
+});
+
+fastify.get('/api/clients/:clientId/audit-logs', { onRequest: [fastify.authenticate] }, async (request: any) => {
+  const { clientId } = request.params;
+  const user = request.user;
+  if (user.clientId !== clientId) throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
+  const logs = await getAuditLogs(clientId);
+  return successResponse(logs, { requestId: request.id });
+});
+
+const gracefulShutdown = async (signal: string) => {
+  console.log(`\n📡 Received ${signal}, shutting down...`);
+  try {
+    await fastify.close();
+    await shutdownDatabaseLayer();
+    console.log('✅ Shutdown complete');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error:', error);
+    process.exit(1);
   }
-  
-  // This would list all clients - implement as needed
-  return { message: 'Use database directly to manage clients' };
-});
+};
 
-fastify.get('/admin/stats/:clientId', async (request, reply) => {
-  if (request.headers.authorization !== `Bearer ${process.env.ADMIN_API_KEY}`) {
-    return reply.code(401).send({ error: 'Unauthorized' });
-  }
-  
-  const { clientId } = request.params as { clientId: string };
-  const stats = await getClientStats(clientId);
-  
-  return stats;
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// ============================================================
-// START
-// ============================================================
-
-const start = async (): Promise<void> => {
+const start = async () => {
   try {
     const port = parseInt(process.env.PORT || '3000', 10);
     await fastify.listen({ port, host: '0.0.0.0' });
-    
     console.log(`
-🚀 WhatsApp AI SaaS v4.0.0 (Multi-tenant)
-════════════════════════════════════════
+🚀 WhatsApp AI SaaS v4.0.0 (Phase 1, 2 & 3 Complete)
+════════════════════════════════════════════════════════════════
 📡 Server: http://localhost:${port}
-🌍 Environment: ${process.env.NODE_ENV || 'development'}
-✅ Database: ${isDatabaseAvailable() ? 'Connected' : 'Not available'}
-✅ Multi-tenant: Ready
-════════════════════════════════════════
+🔒 Phase 1: Security ✅
+🗄️  Phase 2: Database ✅
+📊 Phase 3: API & Backend ✅
+════════════════════════════════════════════════════════════════
     `);
   } catch (err) {
     fastify.log.error(err);
