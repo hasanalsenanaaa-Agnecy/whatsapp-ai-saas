@@ -6,6 +6,7 @@ import { registerAuthRoutes } from './routes/auth.routes.js';
 import { registerClientRoutes } from './routes/clients.routes.js';
 import { registerAdminRoutes } from './routes/admin.routes.js';
 import { registerAIRoutes } from './routes/ai.routes.js';
+import { registerAutomationRoutes } from './routes/automation.routes.js';
 import { verifyWhatsAppWebhook } from './security/webhook-verification.js';
 import { logAudit, extractAuditInfo } from './security/audit.js';
 import { AppError, ErrorCode } from './security/error-handler.js';
@@ -35,6 +36,7 @@ await registerAuthRoutes(fastify);
 await registerClientRoutes(fastify);
 await registerAdminRoutes(fastify);
 await registerAIRoutes(fastify);
+await registerAutomationRoutes(fastify);
 
 fastify.get('/', async (r) => successResponse({
   service: 'WhatsApp AI SaaS',

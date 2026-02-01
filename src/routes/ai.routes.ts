@@ -5,6 +5,7 @@ import { logAudit, extractAuditInfo } from '../security/audit.js';
 import { getClientById, updateClient, updateLead, createAIFeedback, listAIFeedback } from '../services/database.js';
 import { generateKnowledgeResponse, scoreLead } from '../services/knowledge.js';
 import { generateLeadScore, isAIAvailable } from '../services/ai.js';
+import { config } from '../config.js';
 import {
   AIChatSchema,
   AIFeedbackSchema,
@@ -34,6 +35,24 @@ export async function registerAIRoutes(fastify: FastifyInstance) {
         : (client.knowledge_base || []);
 
       return successResponse({ knowledgeBase }, { requestId: request.id });
+    }
+  );
+
+  fastify.get<{ Params: { clientId: string } }>(
+    '/api/clients/:clientId/ai/status',
+    { onRequest: [(fastify as any).authenticate] },
+    async (request: any) => {
+      const { clientId } = request.params;
+      const user = request.user;
+
+      if (user.clientId !== clientId) {
+        throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
+      }
+
+      return successResponse({
+        available: isAIAvailable(),
+        model: config.anthropic.model
+      }, { requestId: request.id });
     }
   );
 

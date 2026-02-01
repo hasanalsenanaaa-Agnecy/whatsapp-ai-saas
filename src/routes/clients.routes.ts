@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { createLead, deleteLead, getLeads, getClientStats, getLeadAnalytics, updateLead } from '../services/database.js';
+import { createLead, deleteLead, getLeads, getClientStats, getLeadAnalytics, getAdvancedAnalytics, updateLead } from '../services/database.js';
 import { CreateLeadSchema, UpdateLeadSchema } from '../schemas/validation.js';
 import { AppError, ErrorCode } from '../security/error-handler.js';
 import { parsePagination, calculatePagination } from '../api/pagination.js';
@@ -210,6 +210,22 @@ export async function registerClientRoutes(fastify: FastifyInstance) {
       }
 
       const analytics = await getLeadAnalytics(clientId);
+      return successResponse(analytics, { requestId: request.id });
+    }
+  );
+
+  fastify.get<{ Params: { clientId: string } }>(
+    '/api/clients/:clientId/analytics/advanced',
+    { onRequest: [fastify.authenticate] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { clientId } = request.params;
+      const user = (request as any).user;
+
+      if (user.clientId !== clientId) {
+        throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
+      }
+
+      const analytics = await getAdvancedAnalytics(clientId);
       return successResponse(analytics, { requestId: request.id });
     }
   );

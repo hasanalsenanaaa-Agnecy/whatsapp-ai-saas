@@ -18,6 +18,7 @@ export default function AIPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [aiStatus, setAiStatus] = useState<{ available: boolean; model: string } | null>(null)
   const [chatMessage, setChatMessage] = useState('')
   const [chatResponse, setChatResponse] = useState<string | null>(null)
   const [chatLoading, setChatLoading] = useState(false)
@@ -39,8 +40,12 @@ export default function AIPage() {
       if (!user?.clientId) return
       try {
         setLoading(true)
-        const data = await aiApi.getKnowledgeBase(user.clientId)
+        const [data, status] = await Promise.all([
+          aiApi.getKnowledgeBase(user.clientId),
+          aiApi.getStatus(user.clientId)
+        ])
         setKnowledgeBase(data || [])
+        setAiStatus(status)
       } catch (err) {
         setError('تعذر تحميل قاعدة المعرفة')
       } finally {
@@ -178,6 +183,12 @@ export default function AIPage() {
           {successMessage && (
             <div className="bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3">
               {successMessage}
+            </div>
+          )}
+
+          {aiStatus && !aiStatus.available && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-4 py-3">
+              الذكاء الاصطناعي غير مفعل حالياً. أضف مفتاح Anthropic لتفعيل الردود.
             </div>
           )}
 
