@@ -8,6 +8,7 @@ import {
   Users,
   Key,
   FileText,
+  Brain,
   LogOut,
   Menu,
   X
@@ -21,6 +22,7 @@ interface DashboardLayoutProps {
 const navItems = [
   { href: '/dashboard', label: 'لوحة التحكم', icon: LayoutDashboard },
   { href: '/leads', label: 'العملاء', icon: Users },
+  { href: '/ai', label: 'الذكاء الاصطناعي', icon: Brain },
   { href: '/api-keys', label: 'مفاتيح API', icon: Key },
   { href: '/audit-logs', label: 'سجل الأحداث', icon: FileText }
 ]

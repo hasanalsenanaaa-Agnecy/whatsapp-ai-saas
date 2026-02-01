@@ -42,8 +42,9 @@ export const config = {
   google: {
     sheetId: getEnvVar('GOOGLE_SHEET_ID'),
     credentials: process.env.GOOGLE_CREDENTIALS || null,
-    credentialsPath: './google-credentials.json',
-    sheetName: getEnvVar('GOOGLE_SHEET_NAME', 'Sheet1')
+    credentialsPath: getEnvVar('GOOGLE_CREDENTIALS_PATH', './google-credentials.json'),
+    sheetName: getEnvVar('GOOGLE_SHEET_NAME', 'Sheet1'),
+    disabled: process.env.GOOGLE_SHEETS_DISABLED === 'true'
   }
 } as const;
 
