@@ -117,7 +117,7 @@ export async function runMigrations(migrations: Migration[]): Promise<void> {
 /**
  * Rollback last migration
  */
-export async function rollbackMigration(migrationId: string): Promise<void> {
+export async function rollbackMigration(migrationId: string, migrations: Migration[] = []): Promise<void> {
   const sql = getPool();
   if (!sql) {
     throw new Error('Database pool not initialized');
@@ -126,10 +126,39 @@ export async function rollbackMigration(migrationId: string): Promise<void> {
   console.log(`⬇️  Rolling back: ${migrationId}`);
 
   try {
-    // Implement rollback logic here
+    const migration = migrations.find(item => item.id === migrationId);
+    if (!migration) {
+      throw new Error(`Migration not found: ${migrationId}`);
+    }
+    if (!migration.down) {
+      throw new Error(`Migration has no rollback handler: ${migrationId}`);
+    }
+
+    await migration.down(sql);
+
+    await sql`
+      UPDATE migrations SET status = 'rolled_back', executed_at = NOW()
+      WHERE id = ${migrationId}
+    `;
+
+    await logAudit({
+      action: 'migration_rolled_back',
+      resourceType: 'migration',
+      resourceId: migrationId,
+      status: 'success'
+    });
+
     console.log(`✅ Rollback completed: ${migrationId}`);
   } catch (error) {
     console.error(`❌ Rollback failed: ${migrationId}`, error);
+
+    await logAudit({
+      action: 'migration_rollback_failed',
+      resourceType: 'migration',
+      resourceId: migrationId,
+      status: 'failed',
+      errorMessage: error instanceof Error ? error.message : 'Unknown error'
+    });
     throw error;
   }
 }

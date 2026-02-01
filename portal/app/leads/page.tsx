@@ -2,15 +2,15 @@
 import { useState, useEffect } from 'react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import DashboardLayout from '@/components/layout/DashboardLayout'
+import { Portal } from '@/components/Portal'
 import { useAuth } from '@/contexts/AuthContext'
 import { Search, Plus, Edit2, Trash2, Eye, X, Filter } from 'lucide-react'
-import { mockLeads, getMockLeads } from '@/lib/utils/mockData'
-import { Lead } from '@/lib/api/leads'
+import { Lead, leadsApi } from '@/lib/api/leads'
 
 export default function LeadsPage() {
   const { user } = useAuth()
-  const [leads, setLeads] = useState<Lead[]>(mockLeads)
-  const [filteredLeads, setFilteredLeads] = useState<Lead[]>(mockLeads)
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [filteredLeads, setFilteredLeads] = useState<Lead[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [scoreFilter, setScoreFilter] = useState<string>('all')
@@ -19,6 +19,25 @@ export default function LeadsPage() {
   const [showEditModal, setShowEditModal] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const load = async () => {
+      if (!user?.clientId) return
+      try {
+        setLoading(true)
+        const response = await leadsApi.getLeads(user.clientId, { limit: 200 })
+        setLeads(response.items || [])
+      } catch (err) {
+        setError('تعذر تحميل العملاء')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    load()
+  }, [user?.clientId])
 
   // Apply filters
   useEffect(() => {
@@ -58,16 +77,28 @@ export default function LeadsPage() {
   }
 
   const confirmDelete = () => {
-    if (selectedLead) {
-      setLeads(leads.filter(l => l.id !== selectedLead.id))
-      setShowDeleteConfirm(false)
-      setSelectedLead(null)
-    }
+    if (!selectedLead || !user?.clientId) return
+    leadsApi.deleteLead(user.clientId, selectedLead.id)
+      .then(() => {
+        setLeads(leads.filter(l => l.id !== selectedLead.id))
+      })
+      .catch(() => {
+        setError('تعذر حذف العميل')
+      })
+      .finally(() => {
+        setShowDeleteConfirm(false)
+        setSelectedLead(null)
+      })
   }
 
   return (
     <ProtectedRoute>
       <DashboardLayout>
+        {loading ? (
+          <div className="flex items-center justify-center min-h-[300px]">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+          </div>
+        ) : (
         <div className="space-y-6">
           {/* Header */}
           <div className="flex items-center justify-between">
@@ -83,6 +114,12 @@ export default function LeadsPage() {
               إضافة عميل
             </button>
           </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3">
+              {error}
+            </div>
+          )}
 
           {/* Filters Bar */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
@@ -201,36 +238,81 @@ export default function LeadsPage() {
             )}
           </div>
         </div>
+        )}
 
         {/* Modals */}
         {showDetailModal && selectedLead && (
-          <DetailModal lead={selectedLead} onClose={() => setShowDetailModal(false)} />
+          <Portal>
+            <DetailModal lead={selectedLead} onClose={() => setShowDetailModal(false)} />
+          </Portal>
         )}
         {showEditModal && selectedLead && (
-          <EditModal
-            lead={selectedLead}
-            onClose={() => setShowEditModal(false)}
-            onSave={(updated) => {
-              setLeads(leads.map(l => l.id === updated.id ? updated : l))
-              setShowEditModal(false)
-            }}
-          />
+          <Portal>
+            <EditModal
+              lead={selectedLead}
+              onClose={() => setShowEditModal(false)}
+              onSave={(updated) => {
+                if (!user?.clientId) return
+                leadsApi.updateLead(user.clientId, updated.id, {
+                  name: updated.name,
+                  phone: updated.phone,
+                  score: updated.score,
+                  status: updated.status,
+                  data: updated.data
+                })
+                  .then(() => {
+                    setLeads(leads.map(l => l.id === updated.id ? updated : l))
+                  })
+                  .catch(() => {
+                    setError('تعذر تحديث العميل')
+                  })
+                  .finally(() => {
+                    setShowEditModal(false)
+                  })
+              }}
+            />
+          </Portal>
         )}
         {showAddModal && (
-          <AddModal
-            onClose={() => setShowAddModal(false)}
-            onAdd={(newLead) => {
-              setLeads([newLead, ...leads])
-              setShowAddModal(false)
-            }}
-          />
+          <Portal>
+            <AddModal
+              onClose={() => setShowAddModal(false)}
+              onAdd={(newLead) => {
+                if (!user?.clientId) return
+                leadsApi.createLead(user.clientId, {
+                  name: newLead.name,
+                  phone: newLead.phone,
+                  email: newLead.email,
+                  data: newLead.data
+                })
+                  .then((created) => {
+                    const createdLead: Lead = {
+                      ...newLead,
+                      id: created.id || newLead.id,
+                      status: created.status || newLead.status,
+                      score: created.score || newLead.score,
+                      createdAt: newLead.createdAt
+                    }
+                    setLeads([createdLead, ...leads])
+                  })
+                  .catch(() => {
+                    setError('تعذر إضافة العميل')
+                  })
+                  .finally(() => {
+                    setShowAddModal(false)
+                  })
+              }}
+            />
+          </Portal>
         )}
         {showDeleteConfirm && selectedLead && (
-          <DeleteConfirmModal
-            leadName={selectedLead.name}
-            onConfirm={confirmDelete}
-            onCancel={() => setShowDeleteConfirm(false)}
-          />
+          <Portal>
+            <DeleteConfirmModal
+              leadName={selectedLead.name}
+              onConfirm={confirmDelete}
+              onCancel={() => setShowDeleteConfirm(false)}
+            />
+          </Portal>
         )}
       </DashboardLayout>
     </ProtectedRoute>

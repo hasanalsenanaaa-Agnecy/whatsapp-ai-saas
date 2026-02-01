@@ -41,6 +41,11 @@ export async function logAudit(entry: AuditLogEntry): Promise<void> {
       )
     `;
   } catch (error) {
+    const errorCode = (error as { code?: string }).code;
+    if (errorCode === '42P01') {
+      console.warn('⚠️  Audit table missing, skipping audit log');
+      return;
+    }
     console.error('❌ Error logging audit:', error);
   }
 }
@@ -81,7 +86,8 @@ export async function getAuditLogs(
       ipAddress: row.ip_address,
       userAgent: row.user_agent,
       status: row.status,
-      errorMessage: row.error_message
+      errorMessage: row.error_message,
+      createdAt: row.created_at
     }));
   } catch (error) {
     console.error('❌ Error fetching audit logs:', error);

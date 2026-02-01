@@ -135,3 +135,23 @@ export async function listAPIKeys(clientId: string): Promise<APIKey[]> {
     return [];
   }
 }
+
+/**
+ * Verify a client API key against active keys
+ */
+export async function verifyClientAPIKey(clientId: string, apiKey: string): Promise<boolean> {
+  if (!sql) return false;
+
+  try {
+    const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+    const result = await sql`
+      SELECT key_hash FROM api_keys
+      WHERE client_id = ${clientId} AND is_active = true
+    `;
+
+    return result.some((row: any) => verifyAPIKeyHash(apiKey, row.key_hash));
+  } catch (error) {
+    console.error('❌ Error verifying API key:', error);
+    return false;
+  }
+}

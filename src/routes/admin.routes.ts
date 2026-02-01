@@ -4,7 +4,8 @@ import {
   getHealthMetrics, 
   createBackup, 
   listBackups, 
-  restoreFromBackup 
+  restoreFromBackup,
+  restoreToPointInTime
 } from '../database/index.js';
 import { AppError, ErrorCode } from '../security/error-handler.js';
 import { successResponse } from '../api/response.js';
@@ -91,6 +92,33 @@ export async function registerAdminRoutes(fastify: FastifyInstance) {
       });
 
       return successResponse({ message: 'Restored' }, { requestId: request.id });
+    }
+  );
+
+  fastify.post<{ Body: { timestamp: string } }>(
+    '/admin/database/restore-to-time',
+    { onRequest: [requireAdmin] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { timestamp } = request.body;
+
+      if (!timestamp) {
+        throw new AppError(400, ErrorCode.INVALID_INPUT, 'Timestamp required');
+      }
+
+      const result = await restoreToPointInTime('./backups', timestamp);
+
+      if (!result.success) {
+        throw new AppError(500, ErrorCode.INTERNAL_ERROR, result.error || 'Restore failed');
+      }
+
+      await logAudit({
+        action: 'database_restore_point_in_time',
+        resourceType: 'database',
+        resourceId: result.filename,
+        status: 'success'
+      });
+
+      return successResponse({ message: 'Restored', filename: result.filename }, { requestId: request.id });
     }
   );
 

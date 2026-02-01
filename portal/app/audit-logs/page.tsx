@@ -3,18 +3,37 @@ import { useState, useEffect } from 'react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import { useAuth } from '@/contexts/AuthContext'
+import { Portal } from '@/components/Portal'
 import { FileText, Filter, CheckCircle, XCircle, AlertCircle, Clock } from 'lucide-react'
-import { mockAuditLogs } from '@/lib/utils/mockData'
-import { AuditLog } from '@/lib/api/operations'
+import { AuditLog, operationsApi } from '@/lib/api/operations'
 
 export default function AuditLogsPage() {
   const { user } = useAuth()
-  const [logs, setLogs] = useState<AuditLog[]>(mockAuditLogs)
-  const [filteredLogs, setFilteredLogs] = useState<AuditLog[]>(mockAuditLogs)
+  const [logs, setLogs] = useState<AuditLog[]>([])
+  const [filteredLogs, setFilteredLogs] = useState<AuditLog[]>([])
   const [actionFilter, setActionFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null)
   const [showDetailModal, setShowDetailModal] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const load = async () => {
+      if (!user?.clientId) return
+      try {
+        setLoading(true)
+        const data = await operationsApi.getAuditLogs(user.clientId, { limit: 200 })
+        setLogs(data || [])
+      } catch (err) {
+        setError('تعذر تحميل سجل الأحداث')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    load()
+  }, [user?.clientId])
 
   // Apply filters
   useEffect(() => {
@@ -42,6 +61,11 @@ export default function AuditLogsPage() {
   return (
     <ProtectedRoute>
       <DashboardLayout>
+        {loading ? (
+          <div className="flex items-center justify-center min-h-[300px]">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+          </div>
+        ) : (
         <div className="space-y-6">
           {/* Header */}
           <div>
@@ -87,6 +111,12 @@ export default function AuditLogsPage() {
               </div>
             </div>
           </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3">
+              {error}
+            </div>
+          )}
 
           {/* Audit Logs Table */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -148,7 +178,7 @@ export default function AuditLogsPage() {
               </table>
             </div>
 
-            {filteredLogs.length === 0 && (
+            {filteredLogs.length === 0 && !loading && (
               <div className="text-center py-12">
                 <FileText className="mx-auto text-slate-300 mb-4" size={48} />
                 <p className="text-slate-500">لا توجد أحداث مطابقة للفلاتر المحددة</p>
@@ -167,10 +197,13 @@ export default function AuditLogsPage() {
             </div>
           </div>
         </div>
+        )}
 
         {/* Detail Modal */}
         {showDetailModal && selectedLog && (
-          <DetailModal log={selectedLog} onClose={() => setShowDetailModal(false)} />
+          <Portal>
+            <DetailModal log={selectedLog} onClose={() => setShowDetailModal(false)} />
+          </Portal>
         )}
       </DashboardLayout>
     </ProtectedRoute>
