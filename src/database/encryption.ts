@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import { pipeline } from 'stream/promises';
 
 /**
  * Encryption configuration
@@ -46,17 +48,20 @@ export function initializeEncryption(): void {
   }
 }
 
+function getActiveKey(): Buffer {
+  if (!encryptionKey) {
+    throw new Error('Encryption not initialized');
+  }
+  return encryptionKey;
+}
+
 /**
  * Encrypt sensitive data
  */
 export function encrypt(plaintext: string): string {
-  if (!encryptionKey) {
-    throw new Error('Encryption not initialized');
-  }
-
   try {
     const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, encryptionKey, iv);
+    const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, getActiveKey(), iv);
 
     let encrypted = cipher.update(plaintext, 'utf8', ENCODING);
     encrypted += cipher.final(ENCODING);
@@ -75,10 +80,6 @@ export function encrypt(plaintext: string): string {
  * Decrypt sensitive data
  */
 export function decrypt(encryptedData: string): string {
-  if (!encryptionKey) {
-    throw new Error('Encryption not initialized');
-  }
-
   try {
     const parts = encryptedData.split(':');
     if (parts.length !== 3) {
@@ -89,7 +90,7 @@ export function decrypt(encryptedData: string): string {
     const authTag = Buffer.from(parts[1], ENCODING);
     const encrypted = parts[2];
 
-    const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, encryptionKey, iv);
+    const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, getActiveKey(), iv);
     decipher.setAuthTag(authTag);
 
     let decrypted = decipher.update(encrypted, ENCODING, 'utf8');
@@ -100,6 +101,80 @@ export function decrypt(encryptedData: string): string {
     console.error('❌ Decryption error:', error);
     throw new Error('Decryption failed');
   }
+}
+
+function normalizeKey(keyHex: string): Buffer {
+  const key = Buffer.from(keyHex, ENCODING);
+  if (key.length !== KEY_LENGTH) {
+    throw new Error(`Encryption key must be ${KEY_LENGTH} bytes (${KEY_LENGTH * 2} hex characters)`);
+  }
+  return key;
+}
+
+async function encryptFileWithBuffer(inputPath: string, outputPath: string, key: Buffer): Promise<{ iv: string; authTag: string }> {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv);
+
+  const writeStream = fs.createWriteStream(outputPath);
+  writeStream.write(iv);
+
+  await pipeline(fs.createReadStream(inputPath), cipher, writeStream);
+
+  const authTag = cipher.getAuthTag();
+  await fs.promises.appendFile(outputPath, authTag);
+
+  return { iv: iv.toString(ENCODING), authTag: authTag.toString(ENCODING) };
+}
+
+export async function encryptFile(inputPath: string, outputPath: string): Promise<{ iv: string; authTag: string }> {
+  return encryptFileWithBuffer(inputPath, outputPath, getActiveKey());
+}
+
+export async function encryptFileWithKey(inputPath: string, outputPath: string, keyHex: string): Promise<{ iv: string; authTag: string }> {
+  const key = normalizeKey(keyHex);
+  return encryptFileWithBuffer(inputPath, outputPath, key);
+}
+
+export async function decryptFile(inputPath: string, outputPath: string): Promise<void> {
+  const key = getActiveKey();
+  const stats = await fs.promises.stat(inputPath);
+  const totalSize = stats.size;
+
+  if (totalSize <= IV_LENGTH + AUTH_TAG_LENGTH) {
+    throw new Error('Encrypted file is too small');
+  }
+
+  const fileHandle = await fs.promises.open(inputPath, 'r');
+  const ivBuffer = Buffer.alloc(IV_LENGTH);
+  const authTagBuffer = Buffer.alloc(AUTH_TAG_LENGTH);
+
+  await fileHandle.read(ivBuffer, 0, IV_LENGTH, 0);
+  await fileHandle.read(authTagBuffer, 0, AUTH_TAG_LENGTH, totalSize - AUTH_TAG_LENGTH);
+  await fileHandle.close();
+
+  const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, key, ivBuffer);
+  decipher.setAuthTag(authTagBuffer);
+
+  await pipeline(
+    fs.createReadStream(inputPath, { start: IV_LENGTH, end: totalSize - AUTH_TAG_LENGTH - 1 }),
+    decipher,
+    fs.createWriteStream(outputPath)
+  );
+}
+
+export function rotateEncryptionKey(newKeyHex: string): string {
+  const newKey = Buffer.from(newKeyHex, ENCODING);
+  if (newKey.length !== KEY_LENGTH) {
+    throw new Error(`Encryption key must be ${KEY_LENGTH} bytes (${KEY_LENGTH * 2} hex characters)`);
+  }
+  const oldKey = encryptionKey ? encryptionKey.toString(ENCODING) : '';
+  encryptionKey = newKey;
+  return oldKey;
+}
+
+export function getEncryptionKeyFingerprint(): string {
+  const key = getActiveKey();
+  return crypto.createHash('sha256').update(key).digest('hex').slice(0, 12);
 }
 
 /**

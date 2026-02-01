@@ -28,6 +28,8 @@ export async function initDatabase(): Promise<boolean> {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         industry TEXT NOT NULL,
+        email TEXT UNIQUE,
+        password_hash TEXT,
         phone_number_id TEXT UNIQUE,
         access_token TEXT,
         verify_token TEXT,
@@ -147,7 +149,9 @@ export async function createClient(client: {
   id: string;
   name: string;
   industry: string;
-  phoneNumberId: string;
+  email?: string;
+  passwordHash?: string;
+  phoneNumberId: string | null;
   accessToken: string;
   verifyToken: string;
   agentPhones: string[];
@@ -161,12 +165,14 @@ export async function createClient(client: {
   try {
     await sql`
       INSERT INTO clients (
-        id, name, industry, phone_number_id, access_token, verify_token,
+        id, name, industry, email, password_hash, phone_number_id, access_token, verify_token,
         agent_phones, settings, questions, messages, knowledge_base
       ) VALUES (
         ${client.id},
         ${client.name},
         ${client.industry},
+        ${client.email || null},
+        ${client.passwordHash || null},
         ${client.phoneNumberId},
         ${client.accessToken},
         ${client.verifyToken},
@@ -403,6 +409,49 @@ export async function updateLeadStatus(leadId: number, status: string, notes?: s
   }
 }
 
+export async function updateLead(leadId: number, updates: {
+  name?: string;
+  phone?: string;
+  email?: string;
+  status?: string;
+  score?: string;
+  notes?: string;
+  data?: any;
+}): Promise<boolean> {
+  if (!sql) return false;
+
+  try {
+    await sql`
+      UPDATE leads SET
+        name = COALESCE(${updates.name || null}, name),
+        phone = COALESCE(${updates.phone || null}, phone),
+        email = COALESCE(${updates.email || null}, email),
+        status = COALESCE(${updates.status || null}, status),
+        score = COALESCE(${updates.score || null}, score),
+        notes = COALESCE(${updates.notes || null}, notes),
+        data = COALESCE(${updates.data ? JSON.stringify(updates.data) : null}, data),
+        updated_at = NOW()
+      WHERE id = ${leadId}
+    `;
+    return true;
+  } catch (error) {
+    console.error('❌ Error updating lead:', error);
+    return false;
+  }
+}
+
+export async function deleteLead(leadId: number): Promise<boolean> {
+  if (!sql) return false;
+
+  try {
+    await sql`DELETE FROM leads WHERE id = ${leadId}`;
+    return true;
+  } catch (error) {
+    console.error('❌ Error deleting lead:', error);
+    return false;
+  }
+}
+
 // ============================================================
 // APPOINTMENT OPERATIONS
 // ============================================================
@@ -504,6 +553,165 @@ export async function getClientStats(clientId: string): Promise<any> {
   } catch (error) {
     console.error('❌ Error getting stats:', error);
     return {};
+  }
+}
+
+export async function getLeadAnalytics(clientId: string): Promise<any> {
+  if (!sql) return {};
+
+  try {
+    const counts = await sql`
+      SELECT
+        COUNT(*)::int as total,
+        COUNT(*) FILTER (WHERE status = 'new')::int as new_count,
+        COUNT(*) FILTER (WHERE status = 'contacted')::int as contacted_count,
+        COUNT(*) FILTER (WHERE status = 'converted')::int as converted_count,
+        COUNT(*) FILTER (WHERE status = 'lost')::int as lost_count,
+        COUNT(*) FILTER (WHERE score = 'hot')::int as hot_count,
+        COUNT(*) FILTER (WHERE score = 'warm')::int as warm_count,
+        COUNT(*) FILTER (WHERE score = 'cold')::int as cold_count
+      FROM leads
+      WHERE client_id = ${clientId}
+    `;
+
+    const pendingAppointments = await sql`
+      SELECT COUNT(*)::int as count
+      FROM appointments
+      WHERE client_id = ${clientId} AND status = 'pending'
+    `;
+
+    const row = counts[0] || {
+      total: 0,
+      new_count: 0,
+      contacted_count: 0,
+      converted_count: 0,
+      lost_count: 0,
+      hot_count: 0,
+      warm_count: 0,
+      cold_count: 0
+    };
+
+    const conversionRate = row.total > 0 ? Math.round((row.converted_count / row.total) * 100) : 0;
+
+    return {
+      totalLeads: row.total,
+      conversionRate,
+      pendingAppointments: parseInt(pendingAppointments[0]?.count || '0'),
+      statusBreakdown: {
+        new: row.new_count,
+        contacted: row.contacted_count,
+        converted: row.converted_count,
+        lost: row.lost_count
+      },
+      scoreBreakdown: {
+        hot: row.hot_count,
+        warm: row.warm_count,
+        cold: row.cold_count
+      }
+    };
+  } catch (error) {
+    console.error('❌ Error getting analytics:', error);
+    return {};
+  }
+}
+
+export async function getClientByEmail(email: string): Promise<any | null> {
+  if (!sql) return null;
+
+  try {
+    const result = await sql`SELECT * FROM clients WHERE email = ${email}`;
+    return result[0] || null;
+  } catch (error) {
+    console.error('❌ Error getting client by email:', error);
+    return null;
+  }
+}
+
+export async function setClientPassword(clientId: string, passwordHash: string): Promise<boolean> {
+  if (!sql) return false;
+
+  try {
+    await sql`UPDATE clients SET password_hash = ${passwordHash} WHERE id = ${clientId}`;
+    return true;
+  } catch (error) {
+    console.error('❌ Error updating client password:', error);
+    return false;
+  }
+}
+
+export async function createPasswordResetToken(clientId: string, tokenHash: string, expiresAt: Date): Promise<boolean> {
+  if (!sql) return false;
+
+  try {
+    await sql`
+      INSERT INTO password_resets (client_id, token_hash, expires_at)
+      VALUES (${clientId}, ${tokenHash}, ${expiresAt})
+    `;
+    return true;
+  } catch (error) {
+    console.error('❌ Error creating password reset token:', error);
+    return false;
+  }
+}
+
+export async function consumePasswordResetToken(tokenHash: string): Promise<{ clientId: string } | null> {
+  if (!sql) return null;
+
+  try {
+    const result = await sql`
+      SELECT id, client_id as clientId FROM password_resets
+      WHERE token_hash = ${tokenHash} AND used_at IS NULL AND expires_at > NOW()
+      LIMIT 1
+    `;
+
+    if (!result[0]) return null;
+
+    await sql`UPDATE password_resets SET used_at = NOW() WHERE id = ${result[0].id}`;
+
+    return { clientId: result[0].clientId };
+  } catch (error) {
+    console.error('❌ Error consuming password reset token:', error);
+    return null;
+  }
+}
+
+export async function createAIFeedback(input: {
+  clientId: string;
+  leadId?: number;
+  conversationId?: string;
+  userMessage?: string;
+  aiResponse: string;
+  rating: number;
+  comment?: string;
+}): Promise<string | null> {
+  if (!sql) return null;
+
+  try {
+    const result = await sql`
+      INSERT INTO ai_feedback (
+        client_id,
+        lead_id,
+        conversation_id,
+        user_message,
+        ai_response,
+        rating,
+        comment
+      ) VALUES (
+        ${input.clientId},
+        ${input.leadId || null},
+        ${input.conversationId || null},
+        ${input.userMessage || null},
+        ${input.aiResponse},
+        ${input.rating},
+        ${input.comment || null}
+      )
+      RETURNING id
+    `;
+
+    return result[0]?.id || null;
+  } catch (error) {
+    console.error('❌ Error creating AI feedback:', error);
+    return null;
   }
 }
 

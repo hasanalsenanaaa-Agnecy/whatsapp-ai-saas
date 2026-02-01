@@ -1,20 +1,39 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import DashboardLayout from '@/components/layout/DashboardLayout'
+import { Portal } from '@/components/Portal'
 import { useAuth } from '@/contexts/AuthContext'
 import { Key, Plus, Trash2, Copy, CheckCircle, AlertCircle, Clock } from 'lucide-react'
-import { mockAPIKeys } from '@/lib/utils/mockData'
-import { APIKey } from '@/lib/api/operations'
+import { APIKey, operationsApi } from '@/lib/api/operations'
 
 export default function APIKeysPage() {
   const { user } = useAuth()
-  const [apiKeys, setApiKeys] = useState<APIKey[]>(mockAPIKeys)
+  const [apiKeys, setApiKeys] = useState<APIKey[]>([])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showRevokeConfirm, setShowRevokeConfirm] = useState(false)
   const [selectedKey, setSelectedKey] = useState<APIKey | null>(null)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [newKeyValue, setNewKeyValue] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const load = async () => {
+      if (!user?.clientId) return
+      try {
+        setLoading(true)
+        const keys = await operationsApi.listAPIKeys(user.clientId)
+        setApiKeys(keys || [])
+      } catch (err) {
+        setError('تعذر تحميل مفاتيح API')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    load()
+  }, [user?.clientId])
 
   const handleCopyKey = (keyId: string, keyValue: string = 'whatsapp_***************') => {
     navigator.clipboard.writeText(keyValue)
@@ -28,32 +47,46 @@ export default function APIKeysPage() {
   }
 
   const confirmRevoke = () => {
-    if (selectedKey) {
-      setApiKeys(apiKeys.map(k =>
-        k.id === selectedKey.id ? { ...k, isActive: false } : k
-      ))
-      setShowRevokeConfirm(false)
-      setSelectedKey(null)
-    }
+    if (!selectedKey || !user?.clientId) return
+    operationsApi.revokeAPIKey(user.clientId, selectedKey.id)
+      .then(() => {
+        setApiKeys(apiKeys.map(k =>
+          k.id === selectedKey.id ? { ...k, isActive: false } : k
+        ))
+      })
+      .catch(() => setError('تعذر إلغاء المفتاح'))
+      .finally(() => {
+        setShowRevokeConfirm(false)
+        setSelectedKey(null)
+      })
   }
 
   const handleCreateKey = (name: string) => {
-    const newKey: APIKey = {
-      id: `key_${Date.now()}`,
-      clientId: user?.clientId || '',
-      name,
-      createdAt: new Date().toISOString(),
-      isActive: true
-    }
-    const generatedKey = `whatsapp_${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`
-    setNewKeyValue(generatedKey)
-    setApiKeys([newKey, ...apiKeys])
-    setShowCreateModal(false)
+    if (!user?.clientId) return
+    operationsApi.createAPIKey(user.clientId, name)
+      .then((created) => {
+        setNewKeyValue(created.key)
+        const newKey: APIKey = {
+          id: created.id,
+          clientId: user.clientId,
+          name,
+          createdAt: new Date().toISOString(),
+          isActive: true
+        }
+        setApiKeys([newKey, ...apiKeys])
+      })
+      .catch(() => setError('تعذر إنشاء المفتاح'))
+      .finally(() => setShowCreateModal(false))
   }
 
   return (
     <ProtectedRoute>
       <DashboardLayout>
+        {loading ? (
+          <div className="flex items-center justify-center min-h-[300px]">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+          </div>
+        ) : (
         <div className="space-y-6">
           {/* Header */}
           <div className="flex items-center justify-between">
@@ -69,6 +102,12 @@ export default function APIKeysPage() {
               إنشاء مفتاح جديد
             </button>
           </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3">
+              {error}
+            </div>
+          )}
 
           {/* New Key Alert */}
           {newKeyValue && (
@@ -185,7 +224,7 @@ export default function APIKeysPage() {
               </table>
             </div>
 
-            {apiKeys.length === 0 && (
+            {apiKeys.length === 0 && !loading && (
               <div className="text-center py-12">
                 <Key className="mx-auto text-slate-300 mb-4" size={48} />
                 <p className="text-slate-500">لا توجد مفاتيح API حالياً</p>
@@ -213,22 +252,27 @@ export default function APIKeysPage() {
             </div>
           </div>
         </div>
+        )}
 
         {/* Create Modal */}
         {showCreateModal && (
-          <CreateKeyModal
-            onClose={() => setShowCreateModal(false)}
-            onCreate={handleCreateKey}
-          />
+          <Portal>
+            <CreateKeyModal
+              onClose={() => setShowCreateModal(false)}
+              onCreate={handleCreateKey}
+            />
+          </Portal>
         )}
 
         {/* Revoke Confirm Modal */}
         {showRevokeConfirm && selectedKey && (
-          <RevokeConfirmModal
-            keyName={selectedKey.name}
-            onConfirm={confirmRevoke}
-            onCancel={() => setShowRevokeConfirm(false)}
-          />
+          <Portal>
+            <RevokeConfirmModal
+              keyName={selectedKey.name}
+              onConfirm={confirmRevoke}
+              onCancel={() => setShowRevokeConfirm(false)}
+            />
+          </Portal>
         )}
       </DashboardLayout>
     </ProtectedRoute>

@@ -1,4 +1,5 @@
 import { checkPoolHealth, getPoolMetrics } from './pool.js';
+import { getQueryMetrics } from './query-logger.js';
 
 /**
  * Comprehensive database health status
@@ -96,6 +97,7 @@ export function getHealthMetrics() {
   return {
     ...healthMetrics,
     successRate: `${healthCheckSuccessRate}%`,
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    queries: getQueryMetrics()
   };
 }

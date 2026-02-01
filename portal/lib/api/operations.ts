@@ -25,23 +25,23 @@ export interface AuditLog {
 export const operationsApi = {
   listAPIKeys: async (clientId: string) => {
     const response = await apiClient.get(`/api/clients/${clientId}/api-keys`)
-    return response.data
+    return response.data.data
   },
 
   createAPIKey: async (clientId: string, name: string) => {
     const response = await apiClient.post(`/api/clients/${clientId}/api-keys`, { name })
-    return response.data
+    return response.data.data
   },
 
   revokeAPIKey: async (clientId: string, keyId: string) => {
     const response = await apiClient.delete(`/api/clients/${clientId}/api-keys/${keyId}`)
-    return response.data
+    return response.data.data
   },
 
   getAuditLogs: async (clientId: string, filters?: { action?: string; limit?: number }) => {
     const response = await apiClient.get(`/api/clients/${clientId}/audit-logs`, {
       params: filters
     })
-    return response.data
+    return response.data.data
   }
 }

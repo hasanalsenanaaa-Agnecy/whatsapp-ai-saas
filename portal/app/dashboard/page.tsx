@@ -1,33 +1,92 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import { useAuth } from '@/contexts/AuthContext'
 import { Users, MessageSquare, Calendar, TrendingUp, Phone, Clock, ArrowUp, ArrowDown } from 'lucide-react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts'
-import { mockStats, mockLeads } from '@/lib/utils/mockData'
+import { leadsApi, Lead, DashboardStats, LeadAnalytics } from '@/lib/api/leads'
 
 const COLORS = ['#10B981', '#3B82F6', '#8B5CF6', '#6B7280']
 
 export default function DashboardPage() {
   const { user } = useAuth()
-  const [stats, setStats] = useState(mockStats)
-  const [loading, setLoading] = useState(false)
+  const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [analytics, setAnalytics] = useState<LeadAnalytics | null>(null)
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const load = async () => {
+      if (!user?.clientId) return
+      try {
+        setLoading(true)
+        const [statsResponse, leadsResponse, analyticsResponse] = await Promise.all([
+          leadsApi.getDashboardStats(user.clientId),
+          leadsApi.getLeads(user.clientId, { limit: 50 }),
+          leadsApi.getAnalytics(user.clientId)
+        ])
+        setStats(statsResponse)
+        setLeads(leadsResponse.items || [])
+        setAnalytics(analyticsResponse)
+      } catch (err) {
+        setError('تعذر تحميل بيانات لوحة التحكم')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    load()
+  }, [user?.clientId])
 
   // Calculate lead status breakdown
-  const statusData = [
-    { name: 'جديد', value: mockLeads.filter(l => l.status === 'new').length, color: '#10B981' },
-    { name: 'تم التواصل', value: mockLeads.filter(l => l.status === 'contacted').length, color: '#3B82F6' },
-    { name: 'تم البيع', value: mockLeads.filter(l => l.status === 'converted').length, color: '#8B5CF6' },
-    { name: 'ملغي', value: mockLeads.filter(l => l.status === 'lost').length, color: '#6B7280' }
-  ]
+  const statusData = useMemo(() => {
+    const breakdown = analytics?.statusBreakdown
+    if (breakdown) {
+      return [
+        { name: 'جديد', value: breakdown.new || 0, color: '#10B981' },
+        { name: 'تم التواصل', value: breakdown.contacted || 0, color: '#3B82F6' },
+        { name: 'تم البيع', value: breakdown.converted || 0, color: '#8B5CF6' },
+        { name: 'ملغي', value: breakdown.lost || 0, color: '#6B7280' }
+      ]
+    }
+    return [
+      { name: 'جديد', value: leads.filter(l => l.status === 'new').length, color: '#10B981' },
+      { name: 'تم التواصل', value: leads.filter(l => l.status === 'contacted').length, color: '#3B82F6' },
+      { name: 'تم البيع', value: leads.filter(l => l.status === 'converted').length, color: '#8B5CF6' },
+      { name: 'ملغي', value: leads.filter(l => l.status === 'lost').length, color: '#6B7280' }
+    ]
+  }, [analytics, leads])
 
   // Calculate score breakdown
-  const scoreData = [
-    { name: 'مهتم جداً', count: mockLeads.filter(l => l.score === 'hot').length },
-    { name: 'مهتم', count: mockLeads.filter(l => l.score === 'warm').length },
-    { name: 'بارد', count: mockLeads.filter(l => l.score === 'cold').length }
-  ]
+  const scoreData = useMemo(() => {
+    const breakdown = analytics?.scoreBreakdown
+    if (breakdown) {
+      return [
+        { name: 'مهتم جداً', count: breakdown.hot || 0 },
+        { name: 'مهتم', count: breakdown.warm || 0 },
+        { name: 'بارد', count: breakdown.cold || 0 }
+      ]
+    }
+    return [
+      { name: 'مهتم جداً', count: leads.filter(l => l.score === 'hot').length },
+      { name: 'مهتم', count: leads.filter(l => l.score === 'warm').length },
+      { name: 'بارد', count: leads.filter(l => l.score === 'cold').length }
+    ]
+  }, [analytics, leads])
+
+  if (loading) {
+    return (
+      <ProtectedRoute>
+        <DashboardLayout>
+          <div className="flex items-center justify-center min-h-[300px]">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+          </div>
+        </DashboardLayout>
+      </ProtectedRoute>
+    )
+  }
 
   return (
     <ProtectedRoute>
@@ -39,45 +98,51 @@ export default function DashboardPage() {
             <p className="text-slate-500 mt-1">مرحباً بك، تابع أداء عملك من هنا</p>
           </div>
 
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3">
+              {error}
+            </div>
+          )}
+
           {/* Stats Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
             <StatCard
               icon={<Users />}
               label="إجمالي العملاء"
-              value={stats.totalLeads}
+              value={stats?.totalLeads ?? 0}
               color="bg-primary"
               trend={{ value: 12, isPositive: true }}
             />
             <StatCard
               icon={<TrendingUp />}
               label="عملاء اليوم"
-              value={stats.todayLeads}
+              value={stats?.todayLeads ?? 0}
               color="bg-green-500"
               trend={{ value: 8, isPositive: true }}
             />
             <StatCard
               icon={<Clock />}
               label="هذا الأسبوع"
-              value={stats.weekLeads}
+              value={stats?.weekLeads ?? 0}
               color="bg-blue-500"
               trend={{ value: 5, isPositive: true }}
             />
             <StatCard
               icon={<Phone />}
               label="عملاء مهتمين"
-              value={stats.hotLeads}
+              value={stats?.hotLeads ?? 0}
               color="bg-red-500"
             />
             <StatCard
               icon={<Calendar />}
               label="مواعيد معلقة"
-              value={stats.pendingAppointments}
+              value={stats?.pendingAppointments ?? 0}
               color="bg-gold"
             />
             <StatCard
               icon={<MessageSquare />}
               label="نسبة التحويل"
-              value={`${stats.conversionRate}%`}
+              value={`${stats?.conversionRate ?? 0}%`}
               color="bg-purple-500"
               trend={{ value: 3, isPositive: true }}
             />
@@ -155,7 +220,7 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {mockLeads.slice(0, 5).map((lead) => (
+                  {leads.slice(0, 5).map((lead) => (
                     <tr key={lead.id} className="hover:bg-slate-50 transition-colors">
                       <td className="px-6 py-4 font-medium text-slate-800">{lead.name}</td>
                       <td className="px-6 py-4 text-slate-600 font-mono text-sm">{lead.phone}</td>

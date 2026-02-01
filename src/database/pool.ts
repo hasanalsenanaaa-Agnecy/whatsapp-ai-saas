@@ -1,5 +1,5 @@
 import postgres from 'postgres';
-import { logAudit } from '../security/audit.js';
+import { recordQuery } from './query-logger.js';
 
 /**
  * Connection Pool Configuration
@@ -22,14 +22,121 @@ const defaultConfig: PoolConfig = {
 };
 
 let pool: ReturnType<typeof postgres> | null = null;
+let inFlightQueries = 0;
 let poolMetrics = {
   created: 0,
   reused: 0,
   failed: 0,
   closed: 0,
+  minConnections: 0,
+  maxConnections: 0,
   totalConnections: 0,
-  availableConnections: 0
+  availableConnections: 0,
+  inFlightQueries: 0,
+  totalQueries: 0,
+  slowQueries: 0,
+  totalQueryTimeMs: 0,
+  avgQueryTimeMs: 0
 };
+
+function wrapPromise<T>(result: Promise<T>, onComplete: (durationMs: number) => void): Promise<T> {
+  const start = Date.now();
+  return result
+    .then(value => {
+      onComplete(Date.now() - start);
+      return value;
+    })
+    .catch(error => {
+      onComplete(Date.now() - start);
+      throw error;
+    });
+}
+
+function extractSqlText(args: any[]): string {
+  if (!args.length) return '';
+  const [first] = args;
+  if (typeof first === 'string') {
+    return first;
+  }
+  if (Array.isArray(first)) {
+    return first.join('?');
+  }
+  return '';
+}
+
+function createInstrumentedPool(rawPool: ReturnType<typeof postgres>): ReturnType<typeof postgres> {
+  const handler: ProxyHandler<any> = {
+    apply(target, thisArg, args) {
+      const sqlText = extractSqlText(args);
+      const paramsCount = Math.max(0, args.length - 1);
+      inFlightQueries += 1;
+      poolMetrics.inFlightQueries = inFlightQueries;
+      poolMetrics.availableConnections = Math.max(0, poolMetrics.maxConnections - inFlightQueries);
+      const result = Reflect.apply(target, thisArg, args);
+      if (result && typeof result.then === 'function') {
+        return wrapPromise(result, (durationMs) => {
+          inFlightQueries -= 1;
+          poolMetrics.inFlightQueries = inFlightQueries;
+          poolMetrics.availableConnections = Math.max(0, poolMetrics.maxConnections - inFlightQueries);
+          poolMetrics.totalQueries += 1;
+          poolMetrics.totalQueryTimeMs += durationMs;
+          poolMetrics.avgQueryTimeMs = Math.round(poolMetrics.totalQueryTimeMs / poolMetrics.totalQueries);
+          if (durationMs >= 1000) {
+            poolMetrics.slowQueries += 1;
+          }
+          recordQuery({
+            sql: sqlText,
+            durationMs,
+            paramsCount,
+            timestamp: new Date().toISOString()
+          });
+        });
+      }
+      inFlightQueries -= 1;
+      poolMetrics.inFlightQueries = inFlightQueries;
+      poolMetrics.availableConnections = Math.max(0, poolMetrics.maxConnections - inFlightQueries);
+      return result;
+    },
+    get(target, prop, receiver) {
+      if (prop === 'unsafe') {
+        return (...args: any[]) => {
+          const sqlText = extractSqlText(args);
+          const paramsCount = Math.max(0, args.length - 1);
+          inFlightQueries += 1;
+          poolMetrics.inFlightQueries = inFlightQueries;
+          poolMetrics.availableConnections = Math.max(0, poolMetrics.maxConnections - inFlightQueries);
+          const result = (target as any).unsafe(...args);
+          if (result && typeof result.then === 'function') {
+            return wrapPromise(result, (durationMs) => {
+              inFlightQueries -= 1;
+              poolMetrics.inFlightQueries = inFlightQueries;
+              poolMetrics.availableConnections = Math.max(0, poolMetrics.maxConnections - inFlightQueries);
+              poolMetrics.totalQueries += 1;
+              poolMetrics.totalQueryTimeMs += durationMs;
+              poolMetrics.avgQueryTimeMs = Math.round(poolMetrics.totalQueryTimeMs / poolMetrics.totalQueries);
+              if (durationMs >= 1000) {
+                poolMetrics.slowQueries += 1;
+              }
+              recordQuery({
+                sql: sqlText,
+                durationMs,
+                paramsCount,
+                timestamp: new Date().toISOString()
+              });
+            });
+          }
+          inFlightQueries -= 1;
+          poolMetrics.inFlightQueries = inFlightQueries;
+          poolMetrics.availableConnections = Math.max(0, poolMetrics.maxConnections - inFlightQueries);
+          return result;
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    }
+  };
+
+  return new Proxy(rawPool as any, handler);
+}
 
 /**
  * Initialize connection pool with health checks
@@ -43,7 +150,7 @@ export async function initializePool(config: Partial<PoolConfig> = {}): Promise<
   }
 
   try {
-    pool = postgres(connectionUrl, {
+    const rawPool = postgres(connectionUrl, {
       ssl: 'require',
       max: finalConfig.max,
       idle_timeout: finalConfig.idleTimeout,
@@ -52,6 +159,12 @@ export async function initializePool(config: Partial<PoolConfig> = {}): Promise<
     });
 
     poolMetrics.created = 1;
+    poolMetrics.minConnections = finalConfig.min;
+    poolMetrics.maxConnections = finalConfig.max;
+    poolMetrics.totalConnections = finalConfig.max;
+    poolMetrics.availableConnections = finalConfig.max;
+
+    pool = createInstrumentedPool(rawPool);
 
     // Test connection
     const result = await pool`SELECT 1 as test`;

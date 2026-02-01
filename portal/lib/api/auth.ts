@@ -2,7 +2,12 @@ import { apiClient } from './client'
 
 export interface LoginCredentials {
   clientId: string
-  password?: string
+  apiKey: string
+}
+
+export interface PasswordLoginCredentials {
+  email: string
+  password: string
 }
 
 export interface RegisterData {
@@ -13,8 +18,22 @@ export interface RegisterData {
 
 export const authApi = {
   login: async (credentials: LoginCredentials) => {
-    // Mock login - replace with actual API call when backend is ready
     const response = await apiClient.post('/auth/login', credentials)
+    return response.data
+  },
+
+  loginWithPassword: async (credentials: PasswordLoginCredentials) => {
+    const response = await apiClient.post('/auth/login/password', credentials)
+    return response.data
+  },
+
+  requestPasswordReset: async (email: string) => {
+    const response = await apiClient.post('/auth/password-reset/request', { email })
+    return response.data
+  },
+
+  confirmPasswordReset: async (token: string, newPassword: string) => {
+    const response = await apiClient.post('/auth/password-reset/confirm', { token, newPassword })
     return response.data
   },
 
