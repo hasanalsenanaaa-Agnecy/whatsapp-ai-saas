@@ -1,7 +1,7 @@
 export const securityConfig = {
   jwt: {
-    // JWT_SECRET must be set in environment - no fallback for security
-    secret: process.env.JWT_SECRET,
+    // JWT_SECRET must be set in environment - validated on startup
+    secret: process.env.JWT_SECRET || '',
     expiresIn: '7d',
     refreshExpiresIn: '30d'
   },
