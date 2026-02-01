@@ -1,11 +1,11 @@
 'use client'
 import { useState, useEffect } from 'react'
-import ProtectedRoute from '../../components/auth/ProtectedRoute'
-import DashboardLayout from '../../components/layout/DashboardLayout'
-import { useAuth } from '../../contexts/AuthContext'
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
+import DashboardLayout from '@/components/layout/DashboardLayout'
+import { useAuth } from '@/contexts/AuthContext'
 import { Search, Plus, Edit2, Trash2, Eye, X, Filter } from 'lucide-react'
-import { mockLeads, getMockLeads } from '../../lib/utils/mockData'
-import { Lead } from '../../lib/api/leads'
+import { mockLeads, getMockLeads } from '@/lib/utils/mockData'
+import { Lead } from '@/lib/api/leads'
 
 export default function LeadsPage() {
   const { user } = useAuth()

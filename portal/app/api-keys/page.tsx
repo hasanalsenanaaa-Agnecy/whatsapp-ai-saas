@@ -1,11 +1,11 @@
 'use client'
 import { useState } from 'react'
-import ProtectedRoute from '../../components/auth/ProtectedRoute'
-import DashboardLayout from '../../components/layout/DashboardLayout'
-import { useAuth } from '../../contexts/AuthContext'
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
+import DashboardLayout from '@/components/layout/DashboardLayout'
+import { useAuth } from '@/contexts/AuthContext'
 import { Key, Plus, Trash2, Copy, CheckCircle, AlertCircle, Clock } from 'lucide-react'
-import { mockAPIKeys } from '../../lib/utils/mockData'
-import { APIKey } from '../../lib/api/operations'
+import { mockAPIKeys } from '@/lib/utils/mockData'
+import { APIKey } from '@/lib/api/operations'
 
 export default function APIKeysPage() {
   const { user } = useAuth()

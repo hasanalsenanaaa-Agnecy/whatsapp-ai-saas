@@ -1,6 +1,6 @@
 'use client'
 import { useState, FormEvent } from 'react'
-import { useAuth } from '../../contexts/AuthContext'
+import { useAuth } from '@/contexts/AuthContext'
 import { LogIn, AlertCircle } from 'lucide-react'
 
 export default function LoginPage() {

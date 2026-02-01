@@ -1,3 +1,8 @@
 {
-  "/page": "app/page.js"
+  "/page": "app/page.js",
+  "/login/page": "app/login/page.js",
+  "/dashboard/page": "app/dashboard/page.js",
+  "/leads/page": "app/leads/page.js",
+  "/api-keys/page": "app/api-keys/page.js",
+  "/audit-logs/page": "app/audit-logs/page.js"
 }
