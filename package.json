@@ -15,6 +15,7 @@
     "db:migrate": "tsx src/tools/db-maintenance.ts migrate",
     "db:rollback": "tsx src/tools/db-maintenance.ts rollback",
     "db:rotate-key": "tsx src/tools/db-maintenance.ts rotate-key",
+    "ai:smoke": "tsx src/tools/ai-smoke-test.ts",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",

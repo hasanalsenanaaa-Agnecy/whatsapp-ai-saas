@@ -31,6 +31,20 @@ npm run db:rotate-key -- <newKeyHex>
 - `BACKUP_S3_REGION` (optional, default: `us-east-1`)
 - `BACKUP_S3_PREFIX` (optional)
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (required for S3)
+- `GOOGLE_SHEETS_DISABLED` (optional, set `true` to disable)
+- `GOOGLE_CREDENTIALS_PATH` (optional, default: `./google-credentials.json`)
+
+## AI Smoke Test (Secure)
+
+```bash
+npm run ai:smoke
+```
+
+Optional base URL:
+
+```bash
+BASE_URL=http://localhost:3000 npm run ai:smoke
+```
 
 ## Portal
 

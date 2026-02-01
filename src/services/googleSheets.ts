@@ -19,6 +19,12 @@ export async function initGoogleSheets(): Promise<boolean> {
     return !!sheetsClient;
   }
 
+  if (config.google.disabled) {
+    console.warn('⚠️ Google Sheets disabled via GOOGLE_SHEETS_DISABLED');
+    isInitialized = true;
+    return false;
+  }
+
   try {
     // Try to get credentials from environment or file
     let credentials: any = null;
@@ -55,8 +61,15 @@ export async function initGoogleSheets(): Promise<boolean> {
     isInitialized = true;
     return true;
 
-  } catch (error) {
-    console.error('❌ Google Sheets initialization failed:', error);
+  } catch (error: any) {
+    const message = error?.message || 'Unknown error';
+    console.error('❌ Google Sheets initialization failed:', message);
+
+    if (message.includes('invalid_grant') || message.includes('Invalid JWT Signature')) {
+      console.error('💡 Check GOOGLE_CREDENTIALS / GOOGLE_CREDENTIALS_PATH and system time');
+      console.error('💡 Ensure the service account key is valid and not expired');
+    }
+
     isInitialized = true;
     return false;
   }
