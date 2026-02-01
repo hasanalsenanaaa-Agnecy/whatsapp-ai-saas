@@ -1,11 +1,11 @@
 'use client'
 import { useState, useEffect } from 'react'
-import ProtectedRoute from '../../components/auth/ProtectedRoute'
-import DashboardLayout from '../../components/layout/DashboardLayout'
-import { useAuth } from '../../contexts/AuthContext'
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
+import DashboardLayout from '@/components/layout/DashboardLayout'
+import { useAuth } from '@/contexts/AuthContext'
 import { FileText, Filter, CheckCircle, XCircle, AlertCircle, Clock } from 'lucide-react'
-import { mockAuditLogs } from '../../lib/utils/mockData'
-import { AuditLog } from '../../lib/api/operations'
+import { mockAuditLogs } from '@/lib/utils/mockData'
+import { AuditLog } from '@/lib/api/operations'
 
 export default function AuditLogsPage() {
   const { user } = useAuth()

@@ -1,4 +1,4 @@
-// File: /Users/abdulhakeemalsenan/whatsapp-ai-saas/portal/app/page.tsx
+// File: /home/runner/work/whatsapp-ai-saas/whatsapp-ai-saas/portal/app/page.tsx
 import * as entry from '../../../app/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

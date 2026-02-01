@@ -1,11 +1,11 @@
 'use client'
 import { useState, useEffect } from 'react'
-import ProtectedRoute from '../../components/auth/ProtectedRoute'
-import DashboardLayout from '../../components/layout/DashboardLayout'
-import { useAuth } from '../../contexts/AuthContext'
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
+import DashboardLayout from '@/components/layout/DashboardLayout'
+import { useAuth } from '@/contexts/AuthContext'
 import { Users, MessageSquare, Calendar, TrendingUp, Phone, Clock, ArrowUp, ArrowDown } from 'lucide-react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts'
-import { mockStats, mockLeads } from '../../lib/utils/mockData'
+import { mockStats, mockLeads } from '@/lib/utils/mockData'
 
 const COLORS = ['#10B981', '#3B82F6', '#8B5CF6', '#6B7280']
 
@@ -96,7 +96,7 @@ export default function DashboardPage() {
                       cx="50%"
                       cy="50%"
                       labelLine={false}
-                      label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                      label={({ name, percent }) => `${name} (${((percent || 0) * 100).toFixed(0)}%)`}
                       outerRadius={80}
                       fill="#8884d8"
                       dataKey="value"
