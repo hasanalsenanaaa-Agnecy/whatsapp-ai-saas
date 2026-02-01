@@ -135,4 +135,44 @@ export const databaseMigrations: Migration[] = [
       await sql.unsafe('DROP TABLE IF EXISTS ai_feedback');
     }
   }
+  ,
+  {
+    id: '2026-02-02-automation',
+    name: 'Add automation sequences and enrollments',
+    up: async (sql) => {
+      await sql.unsafe(`
+        CREATE TABLE IF NOT EXISTS automation_sequences (
+          id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+          client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          steps JSONB NOT NULL DEFAULT '[]',
+          is_active BOOLEAN DEFAULT true,
+          created_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+
+      await sql.unsafe(`
+        CREATE TABLE IF NOT EXISTS automation_enrollments (
+          id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+          client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+          lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+          sequence_id TEXT NOT NULL REFERENCES automation_sequences(id) ON DELETE CASCADE,
+          current_step INTEGER DEFAULT 0,
+          next_run_at TIMESTAMP NOT NULL,
+          status TEXT DEFAULT 'active',
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+
+      await sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_automation_sequences_client ON automation_sequences(client_id)`);
+      await sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_automation_enrollments_client ON automation_enrollments(client_id)`);
+      await sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_automation_enrollments_next_run ON automation_enrollments(next_run_at)`);
+      await sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_automation_enrollments_status ON automation_enrollments(status)`);
+    },
+    down: async (sql) => {
+      await sql.unsafe('DROP TABLE IF EXISTS automation_enrollments');
+      await sql.unsafe('DROP TABLE IF EXISTS automation_sequences');
+    }
+  }
 ];

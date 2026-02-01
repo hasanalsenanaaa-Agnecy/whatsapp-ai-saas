@@ -13,6 +13,10 @@ export interface AIChatResponse {
 }
 
 export const aiApi = {
+  getStatus: async (clientId: string) => {
+    const response = await apiClient.get(`/api/clients/${clientId}/ai/status`)
+    return response.data.data as { available: boolean; model: string }
+  },
   getKnowledgeBase: async (clientId: string) => {
     const response = await apiClient.get(`/api/clients/${clientId}/knowledge`)
     return response.data.data.knowledgeBase as KnowledgeItem[]

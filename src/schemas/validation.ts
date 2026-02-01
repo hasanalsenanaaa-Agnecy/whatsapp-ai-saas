@@ -141,6 +141,26 @@ export const AIFeedbackSchema = z.object({
   comment: z.string().max(1000).optional()
 });
 
+// ============================================================
+// AUTOMATION SCHEMAS
+// ============================================================
+
+export const AutomationStepSchema = z.object({
+  delayMinutes: z.number().int().min(0),
+  message: z.string().min(1).max(4000)
+});
+
+export const AutomationSequenceSchema = z.object({
+  name: z.string().min(3).max(100),
+  steps: z.array(AutomationStepSchema).min(1),
+  isActive: z.boolean().optional()
+});
+
+export const AutomationEnrollmentSchema = z.object({
+  leadId: z.number().int().positive(),
+  sequenceId: z.string().min(1)
+});
+
 // Type exports for use in route handlers
 export type LoginInput = z.infer<typeof LoginSchema>;
 export type ClientLoginInput = z.infer<typeof ClientLoginSchema>;
@@ -156,3 +176,5 @@ export type KnowledgeBaseUpdateInput = z.infer<typeof KnowledgeBaseUpdateSchema>
 export type AIChatInput = z.infer<typeof AIChatSchema>;
 export type AIScoreLeadInput = z.infer<typeof AIScoreLeadSchema>;
 export type AIFeedbackInput = z.infer<typeof AIFeedbackSchema>;
+export type AutomationSequenceInput = z.infer<typeof AutomationSequenceSchema>;
+export type AutomationEnrollmentInput = z.infer<typeof AutomationEnrollmentSchema>;

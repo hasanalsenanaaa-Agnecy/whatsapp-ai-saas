@@ -391,6 +391,20 @@ export async function getLeads(clientId: string, limit: number = 100): Promise<a
   }
 }
 
+export async function getLeadById(clientId: string, leadId: number): Promise<any | null> {
+  if (!sql) return null;
+
+  try {
+    const result = await sql`
+      SELECT * FROM leads WHERE id = ${leadId} AND client_id = ${clientId}
+    `;
+    return result[0] || null;
+  } catch (error) {
+    console.error('❌ Error getting lead by id:', error);
+    return null;
+  }
+}
+
 export async function updateLeadStatus(leadId: number, status: string, notes?: string): Promise<boolean> {
   if (!sql) return false;
   
@@ -615,6 +629,94 @@ export async function getLeadAnalytics(clientId: string): Promise<any> {
   }
 }
 
+export async function getAdvancedAnalytics(clientId: string): Promise<any> {
+  if (!sql) return {};
+
+  try {
+    const sources = await sql`
+      SELECT source, COUNT(*)::int as count
+      FROM leads
+      WHERE client_id = ${clientId}
+      GROUP BY source
+      ORDER BY count DESC
+    `;
+
+    const funnelCounts = await sql`
+      SELECT
+        COUNT(*)::int as total,
+        COUNT(*) FILTER (WHERE status = 'new')::int as new_count,
+        COUNT(*) FILTER (WHERE status = 'contacted')::int as contacted_count,
+        COUNT(*) FILTER (WHERE status = 'converted')::int as converted_count,
+        COUNT(*) FILTER (WHERE status = 'lost')::int as lost_count
+      FROM leads
+      WHERE client_id = ${clientId}
+    `;
+
+    const feedback = await sql`
+      SELECT
+        COUNT(*)::int as total,
+        COALESCE(AVG(rating), 0)::numeric(10,2) as avg_rating,
+        COUNT(*) FILTER (WHERE rating >= 4)::int as positive,
+        COUNT(*) FILTER (WHERE rating = 3)::int as neutral,
+        COUNT(*) FILTER (WHERE rating <= 2)::int as negative
+      FROM ai_feedback
+      WHERE client_id = ${clientId}
+    `;
+
+    const feedbackLeads = await sql`
+      SELECT COUNT(DISTINCT lead_id)::int as count
+      FROM ai_feedback
+      WHERE client_id = ${clientId} AND lead_id IS NOT NULL
+    `;
+
+    const funnelRow = funnelCounts[0] || {
+      total: 0,
+      new_count: 0,
+      contacted_count: 0,
+      converted_count: 0,
+      lost_count: 0
+    };
+
+    const feedbackRow = feedback[0] || {
+      total: 0,
+      avg_rating: 0,
+      positive: 0,
+      neutral: 0,
+      negative: 0
+    };
+
+    const positiveRate = feedbackRow.total > 0
+      ? Math.round((feedbackRow.positive / feedbackRow.total) * 100)
+      : 0;
+
+    return {
+      attribution: sources.map((row: any) => ({
+        source: row.source || 'unknown',
+        count: row.count
+      })),
+      funnel: {
+        total: funnelRow.total,
+        new: funnelRow.new_count,
+        contacted: funnelRow.contacted_count,
+        converted: funnelRow.converted_count,
+        lost: funnelRow.lost_count
+      },
+      aiImpact: {
+        feedbackCount: feedbackRow.total,
+        avgRating: Number(feedbackRow.avg_rating || 0),
+        positiveRate,
+        positive: feedbackRow.positive,
+        neutral: feedbackRow.neutral,
+        negative: feedbackRow.negative,
+        leadsWithFeedback: feedbackLeads[0]?.count || 0
+      }
+    };
+  } catch (error) {
+    console.error('❌ Error getting advanced analytics:', error);
+    return {};
+  }
+}
+
 export async function getClientByEmail(email: string): Promise<any | null> {
   if (!sql) return null;
 
@@ -740,6 +842,178 @@ export async function listAIFeedback(clientId: string, limit: number = 50): Prom
   } catch (error) {
     console.error('❌ Error listing AI feedback:', error);
     return [];
+  }
+}
+
+// ============================================================
+// AUTOMATION OPERATIONS
+// ============================================================
+
+export async function createAutomationSequence(input: {
+  clientId: string;
+  name: string;
+  steps: any[];
+  isActive?: boolean;
+}): Promise<string | null> {
+  if (!sql) return null;
+
+  try {
+    const result = await sql`
+      INSERT INTO automation_sequences (client_id, name, steps, is_active)
+      VALUES (${input.clientId}, ${input.name}, ${JSON.stringify(input.steps)}, ${input.isActive ?? true})
+      RETURNING id
+    `;
+    return result[0]?.id || null;
+  } catch (error) {
+    console.error('❌ Error creating automation sequence:', error);
+    return null;
+  }
+}
+
+export async function listAutomationSequences(clientId: string): Promise<any[]> {
+  if (!sql) return [];
+
+  try {
+    const rows = await sql`
+      SELECT * FROM automation_sequences WHERE client_id = ${clientId} ORDER BY created_at DESC
+    `;
+    return rows.map((row: any) => ({
+      id: row.id,
+      clientId: row.client_id,
+      name: row.name,
+      steps: typeof row.steps === 'string' ? JSON.parse(row.steps) : row.steps,
+      isActive: row.is_active,
+      createdAt: row.created_at
+    }));
+  } catch (error) {
+    console.error('❌ Error listing automation sequences:', error);
+    return [];
+  }
+}
+
+export async function updateAutomationSequence(sequenceId: string, updates: {
+  name?: string;
+  steps?: any[];
+  isActive?: boolean;
+}): Promise<boolean> {
+  if (!sql) return false;
+
+  try {
+    if (updates.name !== undefined) {
+      await sql`UPDATE automation_sequences SET name = ${updates.name} WHERE id = ${sequenceId}`;
+    }
+    if (updates.steps !== undefined) {
+      await sql`UPDATE automation_sequences SET steps = ${JSON.stringify(updates.steps)} WHERE id = ${sequenceId}`;
+    }
+    if (updates.isActive !== undefined) {
+      await sql`UPDATE automation_sequences SET is_active = ${updates.isActive} WHERE id = ${sequenceId}`;
+    }
+    return true;
+  } catch (error) {
+    console.error('❌ Error updating automation sequence:', error);
+    return false;
+  }
+}
+
+export async function deleteAutomationSequence(sequenceId: string): Promise<boolean> {
+  if (!sql) return false;
+
+  try {
+    await sql`DELETE FROM automation_sequences WHERE id = ${sequenceId}`;
+    return true;
+  } catch (error) {
+    console.error('❌ Error deleting automation sequence:', error);
+    return false;
+  }
+}
+
+export async function enrollLeadInSequence(input: {
+  clientId: string;
+  leadId: number;
+  sequenceId: string;
+  nextRunAt: Date;
+}): Promise<string | null> {
+  if (!sql) return null;
+
+  try {
+    const result = await sql`
+      INSERT INTO automation_enrollments (client_id, lead_id, sequence_id, next_run_at)
+      VALUES (${input.clientId}, ${input.leadId}, ${input.sequenceId}, ${input.nextRunAt})
+      RETURNING id
+    `;
+    return result[0]?.id || null;
+  } catch (error) {
+    console.error('❌ Error enrolling lead in sequence:', error);
+    return null;
+  }
+}
+
+export async function listAutomationEnrollments(clientId: string, limit: number = 50): Promise<any[]> {
+  if (!sql) return [];
+
+  try {
+    const rows = await sql`
+      SELECT * FROM automation_enrollments
+      WHERE client_id = ${clientId}
+      ORDER BY created_at DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((row: any) => ({
+      id: row.id,
+      clientId: row.client_id,
+      leadId: row.lead_id,
+      sequenceId: row.sequence_id,
+      currentStep: row.current_step,
+      nextRunAt: row.next_run_at,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  } catch (error) {
+    console.error('❌ Error listing automation enrollments:', error);
+    return [];
+  }
+}
+
+export async function listDueEnrollments(clientId: string, limit: number = 25): Promise<any[]> {
+  if (!sql) return [];
+
+  try {
+    return await sql`
+      SELECT * FROM automation_enrollments
+      WHERE client_id = ${clientId}
+        AND status = 'active'
+        AND next_run_at <= NOW()
+      ORDER BY next_run_at ASC
+      LIMIT ${limit}
+    `;
+  } catch (error) {
+    console.error('❌ Error listing due enrollments:', error);
+    return [];
+  }
+}
+
+export async function updateEnrollmentProgress(input: {
+  enrollmentId: string;
+  currentStep: number;
+  nextRunAt?: Date | null;
+  status?: string;
+}): Promise<boolean> {
+  if (!sql) return false;
+
+  try {
+    await sql`
+      UPDATE automation_enrollments
+      SET current_step = ${input.currentStep},
+          next_run_at = ${input.nextRunAt || null},
+          status = ${input.status || 'active'},
+          updated_at = NOW()
+      WHERE id = ${input.enrollmentId}
+    `;
+    return true;
+  } catch (error) {
+    console.error('❌ Error updating enrollment progress:', error);
+    return false;
   }
 }
 

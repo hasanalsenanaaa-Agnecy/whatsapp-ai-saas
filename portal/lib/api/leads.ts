@@ -35,6 +35,26 @@ export interface LeadAnalytics {
   scoreBreakdown: Record<string, number>
 }
 
+export interface AdvancedAnalytics {
+  attribution: Array<{ source: string; count: number }>
+  funnel: {
+    total: number
+    new: number
+    contacted: number
+    converted: number
+    lost: number
+  }
+  aiImpact: {
+    feedbackCount: number
+    avgRating: number
+    positiveRate: number
+    positive: number
+    neutral: number
+    negative: number
+    leadsWithFeedback: number
+  }
+}
+
 export const leadsApi = {
   getLeads: async (clientId: string, filters?: LeadsFilters) => {
     const response = await apiClient.get(`/api/clients/${clientId}/leads`, {
@@ -74,5 +94,10 @@ export const leadsApi = {
   getAnalytics: async (clientId: string) => {
     const response = await apiClient.get(`/api/clients/${clientId}/analytics`)
     return response.data.data as LeadAnalytics
+  },
+
+  getAdvancedAnalytics: async (clientId: string) => {
+    const response = await apiClient.get(`/api/clients/${clientId}/analytics/advanced`)
+    return response.data.data as AdvancedAnalytics
   }
 }

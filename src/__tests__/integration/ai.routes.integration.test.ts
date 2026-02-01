@@ -10,7 +10,8 @@ vi.mock('../../services/database.js', () => ({
   }),
   updateClient: vi.fn().mockResolvedValue(true),
   updateLead: vi.fn().mockResolvedValue(true),
-  createAIFeedback: vi.fn().mockResolvedValue('fb-123')
+  createAIFeedback: vi.fn().mockResolvedValue('fb-123'),
+  listAIFeedback: vi.fn().mockResolvedValue([])
 }));
 
 vi.mock('../../services/knowledge.js', () => ({
@@ -25,6 +26,14 @@ vi.mock('../../services/knowledge.js', () => ({
 vi.mock('../../services/ai.js', () => ({
   generateLeadScore: vi.fn().mockResolvedValue({ score: 'hot', rationale: 'ai' }),
   isAIAvailable: vi.fn().mockReturnValue(true)
+}));
+
+vi.mock('../../config.js', () => ({
+  config: {
+    anthropic: {
+      model: 'claude-test-model'
+    }
+  }
 }));
 
 vi.mock('../../security/audit.js', () => ({
@@ -62,6 +71,19 @@ describe('AI Routes Integration', () => {
     const body = JSON.parse(response.body);
     expect(body.success).toBe(true);
     expect(body.data.knowledgeBase.length).toBe(1);
+  });
+
+  it('should return AI status', async () => {
+    const response = await fastify.inject({
+      method: 'GET',
+      url: '/api/clients/client_1/ai/status'
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.success).toBe(true);
+    expect(body.data.available).toBe(true);
+    expect(body.data.model).toBe('claude-test-model');
   });
 
   it('should update knowledge base', async () => {
@@ -131,5 +153,17 @@ describe('AI Routes Integration', () => {
     const body = JSON.parse(response.body);
     expect(body.success).toBe(true);
     expect(body.data.id).toBe('fb-123');
+  });
+
+  it('should list AI feedback', async () => {
+    const response = await fastify.inject({
+      method: 'GET',
+      url: '/api/clients/client_1/ai/feedback?limit=10'
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.success).toBe(true);
+    expect(Array.isArray(body.data.items)).toBe(true);
   });
 });
