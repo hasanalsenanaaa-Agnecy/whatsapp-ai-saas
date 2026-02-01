@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import path from 'path';
 import { 
   checkDatabaseHealth, 
   getHealthMetrics, 
@@ -15,6 +16,26 @@ async function requireAdmin(request: FastifyRequest, reply: FastifyReply) {
   if (adminKey !== process.env.ADMIN_API_KEY) {
     throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid admin key');
   }
+}
+
+/**
+ * Sanitize filename to prevent path traversal attacks
+ * Only allows alphanumeric characters, dashes, underscores, and dots
+ */
+function sanitizeFilename(filename: string): string {
+  // Remove any path components and only keep the basename
+  const basename = path.basename(filename);
+  // Only allow safe characters: alphanumeric, dash, underscore, dot
+  const sanitized = basename.replace(/[^a-zA-Z0-9._-]/g, '');
+  // Ensure it doesn't start with a dot (hidden files)
+  if (sanitized.startsWith('.')) {
+    throw new AppError(400, ErrorCode.INVALID_INPUT, 'Invalid filename');
+  }
+  // Ensure it has a reasonable length
+  if (sanitized.length < 1 || sanitized.length > 255) {
+    throw new AppError(400, ErrorCode.INVALID_INPUT, 'Invalid filename length');
+  }
+  return sanitized;
 }
 
 export async function registerAdminRoutes(fastify: FastifyInstance) {
@@ -71,13 +92,15 @@ export async function registerAdminRoutes(fastify: FastifyInstance) {
     '/admin/database/restore',
     { onRequest: [requireAdmin] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const { filename } = request.body;
+      const { filename } = request.body as { filename: string };
 
       if (!filename) {
         throw new AppError(400, ErrorCode.INVALID_INPUT, 'Filename required');
       }
 
-      const result = await restoreFromBackup(`./backups/${filename}`);
+      // Sanitize filename to prevent path traversal
+      const safeFilename = sanitizeFilename(filename);
+      const result = await restoreFromBackup(`./backups/${safeFilename}`);
 
       if (!result.success) {
         throw new AppError(500, ErrorCode.INTERNAL_ERROR, result.error || 'Restore failed');
@@ -86,7 +109,7 @@ export async function registerAdminRoutes(fastify: FastifyInstance) {
       await logAudit({
         action: 'database_restore',
         resourceType: 'database',
-        resourceId: filename,
+        resourceId: safeFilename,
         status: 'success'
       });
 

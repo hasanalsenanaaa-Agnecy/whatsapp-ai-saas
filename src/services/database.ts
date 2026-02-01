@@ -188,9 +188,6 @@ export async function updateClient(clientId: string, updates: any): Promise<bool
   if (!sql) return false;
   
   try {
-    const setClauses: string[] = [];
-    const values: any[] = [];
-    
     if (updates.name) {
       await sql`UPDATE clients SET name = ${updates.name} WHERE id = ${clientId}`;
     }

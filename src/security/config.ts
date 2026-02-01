@@ -1,6 +1,7 @@
 export const securityConfig = {
   jwt: {
-    secret: process.env.JWT_SECRET || 'change-me-in-production',
+    // JWT_SECRET must be set in environment - no fallback for security
+    secret: process.env.JWT_SECRET,
     expiresIn: '7d',
     refreshExpiresIn: '30d'
   },
@@ -36,13 +37,19 @@ export function validateSecurityConfig(): void {
 
   const missing = required.filter(key => !process.env[key]);
 
-  if (missing.length > 0 && process.env.NODE_ENV === 'production') {
+  if (missing.length > 0) {
     console.error('❌ Missing required security environment variables:');
     missing.forEach(key => console.error(`   - ${key}`));
-    process.exit(1);
+    if (process.env.NODE_ENV === 'production') {
+      process.exit(1);
+    } else {
+      console.warn('⚠️  WARNING: Running in development mode without required secrets!');
+    }
   }
 
-  if (process.env.JWT_SECRET === 'change-me-in-production') {
-    console.warn('⚠️  WARNING: Change JWT_SECRET in production!');
+  // Check for weak secrets
+  const jwtSecret = process.env.JWT_SECRET || '';
+  if (jwtSecret && jwtSecret.length < 32) {
+    console.warn('⚠️  WARNING: JWT_SECRET should be at least 32 characters long!');
   }
 }

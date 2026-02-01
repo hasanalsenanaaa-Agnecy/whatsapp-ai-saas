@@ -1,8 +1,7 @@
 import { sendWhatsAppMessage } from './services/whatsapp.js';
 import { 
   getConversation, 
-  saveConversation, 
-  updateConversation,
+  saveConversation,
   createLead,
   createAppointment,
   getClientByPhoneNumberId
@@ -33,10 +32,28 @@ interface ConversationState {
 
 export async function handleIncomingMessage(
   phoneNumberId: string,
-  customerPhone: string,
-  message: string,
+  webhookPayload: any,
   accessToken: string
 ): Promise<void> {
+  // Parse WhatsApp webhook payload to extract customer phone and message
+  const entry = webhookPayload?.entry?.[0];
+  const change = entry?.changes?.[0];
+  const value = change?.value;
+  const messageData = value?.messages?.[0];
+  
+  // Skip if no message data (could be a status update)
+  if (!messageData || messageData.type !== 'text') {
+    console.log('📭 No text message in webhook payload, skipping');
+    return;
+  }
+  
+  const customerPhone = messageData.from;
+  const message = messageData.text?.body || '';
+  
+  if (!customerPhone || !message) {
+    console.log('⚠️ Missing customer phone or message');
+    return;
+  }
   
   // Get client config from database
   const client = await getClientByPhoneNumberId(phoneNumberId);
