@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { Users, MessageSquare, Calendar, TrendingUp, Phone, Clock } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 
 interface Stats {
   totalLeads: number
@@ -25,9 +26,10 @@ export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
+  const router = useRouter() // Retained from the other branch of the merge
 
   useEffect(() => {
-    // Replace with your API
+    // Simulate fetching data
     setStats({
       totalLeads: 47,
       todayLeads: 5,
@@ -41,7 +43,13 @@ export default function Dashboard() {
       { id: 2, name: 'أحمد السعيد', phone: '0551234567', score: 'warm', status: 'contacted', data: { interest: 'سيدان', budget: '50 - 100 ألف' }, createdAt: new Date().toISOString() },
     ])
     setLoading(false)
-  }, [])
+
+    // Check if user is authenticated (from the other side of the merge)
+    const token = localStorage.getItem('auth_token')
+    if (!token) {
+      router.push('/login')
+    }
+  }, [router])
 
   const scoreColors: Record<string, string> = {
     hot: 'bg-red-100 text-red-700',
