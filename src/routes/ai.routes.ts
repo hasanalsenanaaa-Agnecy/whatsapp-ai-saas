@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { successResponse } from '../api/response.js';
 import { AppError, ErrorCode } from '../security/error-handler.js';
 import { logAudit, extractAuditInfo } from '../security/audit.js';
-import { getClientById, updateClient, updateLead, createAIFeedback } from '../services/database.js';
+import { getClientById, updateClient, updateLead, createAIFeedback, listAIFeedback } from '../services/database.js';
 import { generateKnowledgeResponse, scoreLead } from '../services/knowledge.js';
 import { generateLeadScore, isAIAvailable } from '../services/ai.js';
 import {
@@ -177,6 +177,24 @@ export async function registerAIRoutes(fastify: FastifyInstance) {
 
       reply.code(201);
       return successResponse({ id }, { requestId: request.id });
+    }
+  );
+
+  fastify.get<{ Params: { clientId: string }; Querystring: { limit?: string } }>(
+    '/api/clients/:clientId/ai/feedback',
+    { onRequest: [(fastify as any).authenticate] },
+    async (request: any) => {
+      const { clientId } = request.params;
+      const user = request.user;
+
+      if (user.clientId !== clientId) {
+        throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
+      }
+
+      const limit = request.query?.limit ? parseInt(request.query.limit, 10) : 50;
+      const feedback = await listAIFeedback(clientId, Number.isNaN(limit) ? 50 : limit);
+
+      return successResponse({ items: feedback }, { requestId: request.id });
     }
   );
 }

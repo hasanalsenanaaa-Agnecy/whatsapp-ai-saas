@@ -18,6 +18,22 @@ export const aiApi = {
     return response.data.data.knowledgeBase as KnowledgeItem[]
   },
 
+  listFeedback: async (clientId: string, limit: number = 50) => {
+    const response = await apiClient.get(`/api/clients/${clientId}/ai/feedback`, {
+      params: { limit }
+    })
+    return response.data.data.items as Array<{
+      id: string
+      leadId?: number
+      conversationId?: string
+      userMessage?: string
+      aiResponse: string
+      rating: number
+      comment?: string
+      createdAt: string
+    }>
+  },
+
   updateKnowledgeBase: async (clientId: string, knowledgeBase: KnowledgeItem[]) => {
     const response = await apiClient.put(`/api/clients/${clientId}/knowledge`, {
       knowledgeBase

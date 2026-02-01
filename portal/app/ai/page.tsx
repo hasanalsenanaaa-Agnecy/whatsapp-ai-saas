@@ -17,14 +17,20 @@ export default function AIPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [chatMessage, setChatMessage] = useState('')
   const [chatResponse, setChatResponse] = useState<string | null>(null)
+  const [chatLoading, setChatLoading] = useState(false)
   const [scoreInput, setScoreInput] = useState<LeadScoreInput>({
     budget: '',
     askedAboutPrice: false,
     messageCount: 1
   })
   const [scoreResult, setScoreResult] = useState<string | null>(null)
+  const [scoreLoading, setScoreLoading] = useState(false)
+  const [feedbackRating, setFeedbackRating] = useState(5)
+  const [feedbackComment, setFeedbackComment] = useState('')
+  const [feedbackStatus, setFeedbackStatus] = useState<string | null>(null)
 
   const canLoad = !!user?.clientId
 
@@ -61,10 +67,19 @@ export default function AIPage() {
 
   const handleSave = async () => {
     if (!user?.clientId) return
+    const invalidItems = knowledgeBase.filter(
+      (item) => !item.category.trim() || !item.question.trim() || !item.answer.trim()
+    )
+    if (invalidItems.length > 0) {
+      setError('يرجى تعبئة التصنيف والسؤال والإجابة لكل عنصر')
+      return
+    }
     try {
       setSaving(true)
       setError(null)
+      setSuccessMessage(null)
       await aiApi.updateKnowledgeBase(user.clientId, knowledgeBase)
+      setSuccessMessage('تم حفظ قاعدة المعرفة')
     } catch (err) {
       setError('تعذر حفظ قاعدة المعرفة')
     } finally {
@@ -76,19 +91,31 @@ export default function AIPage() {
     if (!user?.clientId || !chatMessage.trim()) return
     try {
       setError(null)
+      setSuccessMessage(null)
+      setChatLoading(true)
+      setChatResponse(null)
+      setFeedbackStatus(null)
       const response = await aiApi.chat(user.clientId, chatMessage, {
-        name: user.name
+        name: user.clientId
       })
       setChatResponse(response.answer)
     } catch (err) {
       setError('تعذر تشغيل رد الذكاء الاصطناعي')
+    } finally {
+      setChatLoading(false)
     }
   }
 
   const handleScore = async () => {
     if (!user?.clientId) return
+    if (scoreInput.messageCount < 1) {
+      setError('عدد الرسائل يجب أن يكون 1 أو أكثر')
+      return
+    }
     try {
       setError(null)
+      setSuccessMessage(null)
+      setScoreLoading(true)
       const result = await aiApi.scoreLead(user.clientId, {
         budget: scoreInput.budget,
         askedAboutPrice: scoreInput.askedAboutPrice,
@@ -97,6 +124,25 @@ export default function AIPage() {
       setScoreResult(`${result.score} (${result.rationale || ''})`)
     } catch (err) {
       setError('تعذر تقييم العميل')
+    } finally {
+      setScoreLoading(false)
+    }
+  }
+
+  const handleFeedback = async () => {
+    if (!user?.clientId || !chatResponse) return
+    try {
+      setError(null)
+      setSuccessMessage(null)
+      setFeedbackStatus(null)
+      await aiApi.submitFeedback(user.clientId, {
+        aiResponse: chatResponse,
+        rating: feedbackRating,
+        comment: feedbackComment.trim() || undefined
+      })
+      setFeedbackStatus('تم إرسال التقييم بنجاح')
+    } catch (err) {
+      setFeedbackStatus('تعذر إرسال التقييم')
     }
   }
 
@@ -129,6 +175,12 @@ export default function AIPage() {
             </div>
           )}
 
+          {successMessage && (
+            <div className="bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3">
+              {successMessage}
+            </div>
+          )}
+
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-slate-800">قاعدة المعرفة</h2>
@@ -150,7 +202,9 @@ export default function AIPage() {
             </div>
 
             {isEmpty && (
-              <div className="text-slate-500">لا توجد عناصر بعد. أضف أول سؤال.</div>
+              <div className="text-slate-500">
+                لا توجد عناصر بعد. أضف أول سؤال أو استورد بياناتك.
+              </div>
             )}
 
             <div className="space-y-4">
@@ -202,14 +256,49 @@ export default function AIPage() {
               />
               <button
                 onClick={handleChat}
-                disabled={!chatMessage.trim() || !canLoad}
+                disabled={!chatMessage.trim() || !canLoad || chatLoading}
                 className="px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-60"
               >
-                تشغيل
+                {chatLoading ? 'جاري التشغيل...' : 'تشغيل'}
               </button>
               {chatResponse && (
-                <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-slate-700">
-                  {chatResponse}
+                <div className="space-y-3">
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-slate-700">
+                    {chatResponse}
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded-lg px-4 py-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold text-slate-700">تقييم الرد</span>
+                      <select
+                        value={feedbackRating}
+                        onChange={(event) => setFeedbackRating(Number(event.target.value))}
+                        className="border rounded-md px-2 py-1 text-sm"
+                      >
+                        {[5, 4, 3, 2, 1].map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <textarea
+                      value={feedbackComment}
+                      onChange={(event) => setFeedbackComment(event.target.value)}
+                      rows={2}
+                      className="border rounded-lg px-3 py-2 text-sm w-full"
+                      placeholder="ملاحظات إضافية (اختياري)"
+                    />
+                    <button
+                      onClick={handleFeedback}
+                      disabled={!chatResponse}
+                      className="px-4 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-900 disabled:opacity-60"
+                    >
+                      إرسال التقييم
+                    </button>
+                    {feedbackStatus && (
+                      <div className="text-sm text-slate-600">{feedbackStatus}</div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -244,9 +333,10 @@ export default function AIPage() {
               />
               <button
                 onClick={handleScore}
+                disabled={scoreLoading}
                 className="px-4 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-900"
               >
-                تقييم
+                {scoreLoading ? 'جاري التقييم...' : 'تقييم'}
               </button>
               {scoreResult && (
                 <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-slate-700">

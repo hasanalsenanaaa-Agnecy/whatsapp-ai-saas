@@ -9,6 +9,7 @@ import {
   Key,
   FileText,
   Brain,
+  MessageCircleStar,
   LogOut,
   Menu,
   X
@@ -23,6 +24,7 @@ const navItems = [
   { href: '/dashboard', label: 'لوحة التحكم', icon: LayoutDashboard },
   { href: '/leads', label: 'العملاء', icon: Users },
   { href: '/ai', label: 'الذكاء الاصطناعي', icon: Brain },
+  { href: '/ai/feedback', label: 'تقييمات الذكاء الاصطناعي', icon: MessageCircleStar },
   { href: '/api-keys', label: 'مفاتيح API', icon: Key },
   { href: '/audit-logs', label: 'سجل الأحداث', icon: FileText }
 ]
