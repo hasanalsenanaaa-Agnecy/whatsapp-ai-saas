@@ -62,6 +62,46 @@ async function resolveWebhookClient(clientId: string) {
   return getClientByPhoneNumberId(clientId);
 }
 
+function extractPhoneNumberId(payload: any): string | null {
+  const entry = payload?.entry?.[0];
+  const change = entry?.changes?.[0];
+  const metadata = change?.value?.metadata;
+  return metadata?.phone_number_id || null;
+}
+
+fastify.get('/webhook/whatsapp', async (request, reply) => {
+  const query = request.query as any;
+  if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === config.whatsapp.verifyToken) {
+    reply.send(query['hub.challenge']);
+  } else {
+    throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid token');
+  }
+});
+
+fastify.post('/webhook/whatsapp', { onRequest: [createRateLimitMiddleware('/webhook/whatsapp')] }, async (request, reply) => {
+  const signature = request.headers['x-hub-signature-256'] as string;
+  const phoneNumberId = extractPhoneNumberId(request.body);
+  if (!phoneNumberId) throw new AppError(400, ErrorCode.INVALID_INPUT, 'Missing phone_number_id');
+  const client = await getClientByPhoneNumberId(phoneNumberId);
+  if (!client) throw new AppError(404, ErrorCode.NOT_FOUND, 'Not found');
+  const body = JSON.stringify(request.body);
+  if (!verifyWhatsAppWebhook(body, signature, client.verify_token)) {
+    await logAudit({
+      clientId: client.id,
+      action: 'webhook_signature_verification_failed',
+      status: 'denied',
+      ...extractAuditInfo(request)
+    });
+    throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid signature');
+  }
+  setImmediate(() => {
+    handleIncomingMessage(client.id, request.body, client.access_token).catch(err => {
+      console.error('Error:', err);
+    });
+  });
+  reply.code(200).send({ ok: true });
+});
+
 fastify.get('/webhook/whatsapp/:clientId', async (request, reply) => {
   const { clientId } = request.params as any;
   const query = request.query as any;
