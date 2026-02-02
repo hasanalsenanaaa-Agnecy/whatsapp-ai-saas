@@ -45,6 +45,13 @@ export const config = {
     credentialsPath: getEnvVar('GOOGLE_CREDENTIALS_PATH', './google-credentials.json'),
     sheetName: getEnvVar('GOOGLE_SHEET_NAME', 'Sheet1'),
     disabled: process.env.GOOGLE_SHEETS_DISABLED === 'true'
+  },
+
+  uploads: {
+    dir: getEnvVar('UPLOADS_DIR', './uploads'),
+    maxSizeMb: parseInt(getEnvVar('UPLOADS_MAX_MB', '10'), 10),
+    s3Bucket: getEnvVar('UPLOADS_S3_BUCKET', ''),
+    s3Region: getEnvVar('UPLOADS_S3_REGION', '')
   }
 } as const;
 

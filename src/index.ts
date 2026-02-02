@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
+import multipart from '@fastify/multipart';
 import { initializeSecurity } from './security/init.js';
 import { registerAuthRoutes } from './routes/auth.routes.js';
 import { registerClientRoutes } from './routes/clients.routes.js';
@@ -18,6 +19,7 @@ import { successResponse } from './api/response.js';
 import { initDatabase, isDatabaseAvailable, getClientByPhoneNumberId, getLeads, getClientStats } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
+import { config } from './config.js';
 
 const fastify = Fastify({
   logger: {
@@ -30,6 +32,11 @@ const fastify = Fastify({
 await initDatabase();
 await initGoogleSheets();
 await fastify.register(rateLimit, { max: 100, timeWindow: '1 minute' });
+await fastify.register(multipart, {
+  limits: {
+    fileSize: config.uploads.maxSizeMb * 1024 * 1024
+  }
+});
 await initializeSecurity(fastify);
 await initializeDatabaseLayer();
 await registerAuthRoutes(fastify);

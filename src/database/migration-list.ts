@@ -174,5 +174,64 @@ export const databaseMigrations: Migration[] = [
       await sql.unsafe('DROP TABLE IF EXISTS automation_enrollments');
       await sql.unsafe('DROP TABLE IF EXISTS automation_sequences');
     }
+  },
+  {
+    id: '2026-02-02-analytics-uploads',
+    name: 'Add analytics uploads table',
+    up: async (sql) => {
+      await sql.unsafe(`
+        CREATE TABLE IF NOT EXISTS analytics_uploads (
+          id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+          client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+          filename TEXT NOT NULL,
+          mime_type TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'uploaded',
+          row_count INTEGER,
+          columns JSONB DEFAULT '[]',
+          sample_rows JSONB DEFAULT '[]',
+          summary JSONB DEFAULT '{}',
+          storage_key TEXT,
+          error TEXT,
+          suggestions JSONB,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+
+      await sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_analytics_uploads_client ON analytics_uploads(client_id)`);
+      await sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_analytics_uploads_status ON analytics_uploads(status)`);
+      await sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_analytics_uploads_created ON analytics_uploads(created_at DESC)`);
+    },
+    down: async (sql) => {
+      await sql.unsafe('DROP TABLE IF EXISTS analytics_uploads');
+    }
+  },
+  {
+    id: '2026-02-02-analytics-uploads-metadata',
+    name: 'Add analytics upload metadata fields',
+    up: async (sql) => {
+      await sql.unsafe(`
+        DO $$
+        BEGIN
+          ALTER TABLE analytics_uploads ADD COLUMN data_type TEXT;
+        EXCEPTION WHEN duplicate_column THEN
+          NULL;
+        END $$;
+      `);
+
+      await sql.unsafe(`
+        DO $$
+        BEGIN
+          ALTER TABLE analytics_uploads ADD COLUMN notes TEXT;
+        EXCEPTION WHEN duplicate_column THEN
+          NULL;
+        END $$;
+      `);
+    },
+    down: async (sql) => {
+      await sql.unsafe('ALTER TABLE analytics_uploads DROP COLUMN IF EXISTS data_type');
+      await sql.unsafe('ALTER TABLE analytics_uploads DROP COLUMN IF EXISTS notes');
+    }
   }
 ];

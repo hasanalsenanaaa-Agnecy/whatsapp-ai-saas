@@ -522,6 +522,215 @@ export async function getAppointments(clientId: string, status?: string): Promis
 // ANALYTICS
 // ============================================================
 
+export type AnalyticsUploadRecord = {
+  id: string;
+  clientId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  status: string;
+  rowCount: number | null;
+  columns: any[];
+  sampleRows: any[];
+  summary: any;
+  storageKey: string | null;
+  error: string | null;
+  suggestions: any | null;
+  dataType: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function createAnalyticsUpload(input: {
+  clientId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  status?: string;
+  rowCount?: number | null;
+  columns?: any[];
+  sampleRows?: any[];
+  summary?: any;
+  storageKey?: string | null;
+  error?: string | null;
+  suggestions?: any | null;
+  dataType?: string | null;
+  notes?: string | null;
+}): Promise<string | null> {
+  if (!sql) return null;
+
+  try {
+    const result = await sql`
+      INSERT INTO analytics_uploads (
+        client_id,
+        filename,
+        mime_type,
+        size_bytes,
+        status,
+        row_count,
+        columns,
+        sample_rows,
+        summary,
+        storage_key,
+        error,
+        suggestions,
+        data_type,
+        notes
+      ) VALUES (
+        ${input.clientId},
+        ${input.filename},
+        ${input.mimeType},
+        ${input.sizeBytes},
+        ${input.status || 'uploaded'},
+        ${input.rowCount ?? null},
+        ${JSON.stringify(input.columns || [])},
+        ${JSON.stringify(input.sampleRows || [])},
+        ${JSON.stringify(input.summary || {})},
+        ${input.storageKey || null},
+        ${input.error || null},
+        ${JSON.stringify(input.suggestions || null)},
+        ${input.dataType || null},
+        ${input.notes || null}
+      )
+      RETURNING id
+    `;
+
+    return result[0]?.id || null;
+  } catch (error) {
+    console.error('❌ Error creating analytics upload:', error);
+    return null;
+  }
+}
+
+export async function updateAnalyticsUpload(uploadId: string, updates: {
+  status?: string;
+  rowCount?: number | null;
+  columns?: any[];
+  sampleRows?: any[];
+  summary?: any;
+  storageKey?: string | null;
+  error?: string | null;
+  suggestions?: any | null;
+  dataType?: string | null;
+  notes?: string | null;
+}): Promise<boolean> {
+  if (!sql) return false;
+
+  try {
+    if (updates.status !== undefined) {
+      await sql`UPDATE analytics_uploads SET status = ${updates.status} WHERE id = ${uploadId}`;
+    }
+    if (updates.rowCount !== undefined) {
+      await sql`UPDATE analytics_uploads SET row_count = ${updates.rowCount} WHERE id = ${uploadId}`;
+    }
+    if (updates.columns !== undefined) {
+      await sql`UPDATE analytics_uploads SET columns = ${JSON.stringify(updates.columns)} WHERE id = ${uploadId}`;
+    }
+    if (updates.sampleRows !== undefined) {
+      await sql`UPDATE analytics_uploads SET sample_rows = ${JSON.stringify(updates.sampleRows)} WHERE id = ${uploadId}`;
+    }
+    if (updates.summary !== undefined) {
+      await sql`UPDATE analytics_uploads SET summary = ${JSON.stringify(updates.summary)} WHERE id = ${uploadId}`;
+    }
+    if (updates.storageKey !== undefined) {
+      await sql`UPDATE analytics_uploads SET storage_key = ${updates.storageKey} WHERE id = ${uploadId}`;
+    }
+    if (updates.error !== undefined) {
+      await sql`UPDATE analytics_uploads SET error = ${updates.error} WHERE id = ${uploadId}`;
+    }
+    if (updates.suggestions !== undefined) {
+      await sql`UPDATE analytics_uploads SET suggestions = ${JSON.stringify(updates.suggestions)} WHERE id = ${uploadId}`;
+    }
+    if (updates.dataType !== undefined) {
+      await sql`UPDATE analytics_uploads SET data_type = ${updates.dataType} WHERE id = ${uploadId}`;
+    }
+    if (updates.notes !== undefined) {
+      await sql`UPDATE analytics_uploads SET notes = ${updates.notes} WHERE id = ${uploadId}`;
+    }
+
+    await sql`UPDATE analytics_uploads SET updated_at = NOW() WHERE id = ${uploadId}`;
+    return true;
+  } catch (error) {
+    console.error('❌ Error updating analytics upload:', error);
+    return false;
+  }
+}
+
+export async function listAnalyticsUploads(clientId: string): Promise<AnalyticsUploadRecord[]> {
+  if (!sql) return [];
+
+  try {
+    const result = await sql`
+      SELECT * FROM analytics_uploads
+      WHERE client_id = ${clientId}
+      ORDER BY created_at DESC
+      LIMIT 50
+    `;
+
+    return result.map((row: any) => ({
+      id: row.id,
+      clientId: row.client_id,
+      filename: row.filename,
+      mimeType: row.mime_type,
+      sizeBytes: row.size_bytes,
+      status: row.status,
+      rowCount: row.row_count,
+      columns: typeof row.columns === 'string' ? JSON.parse(row.columns) : row.columns,
+      sampleRows: typeof row.sample_rows === 'string' ? JSON.parse(row.sample_rows) : row.sample_rows,
+      summary: typeof row.summary === 'string' ? JSON.parse(row.summary) : row.summary,
+      storageKey: row.storage_key,
+      error: row.error,
+      suggestions: typeof row.suggestions === 'string' ? JSON.parse(row.suggestions) : row.suggestions,
+      dataType: row.data_type,
+      notes: row.notes,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  } catch (error) {
+    console.error('❌ Error listing analytics uploads:', error);
+    return [];
+  }
+}
+
+export async function getAnalyticsUpload(clientId: string, uploadId: string): Promise<AnalyticsUploadRecord | null> {
+  if (!sql) return null;
+
+  try {
+    const result = await sql`
+      SELECT * FROM analytics_uploads
+      WHERE client_id = ${clientId} AND id = ${uploadId}
+      LIMIT 1
+    `;
+
+    const row = result[0];
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      clientId: row.client_id,
+      filename: row.filename,
+      mimeType: row.mime_type,
+      sizeBytes: row.size_bytes,
+      status: row.status,
+      rowCount: row.row_count,
+      columns: typeof row.columns === 'string' ? JSON.parse(row.columns) : row.columns,
+      sampleRows: typeof row.sample_rows === 'string' ? JSON.parse(row.sample_rows) : row.sample_rows,
+      summary: typeof row.summary === 'string' ? JSON.parse(row.summary) : row.summary,
+      storageKey: row.storage_key,
+      error: row.error,
+      suggestions: typeof row.suggestions === 'string' ? JSON.parse(row.suggestions) : row.suggestions,
+      dataType: row.data_type,
+      notes: row.notes,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  } catch (error) {
+    console.error('❌ Error getting analytics upload:', error);
+    return null;
+  }
+}
+
 export async function getClientStats(clientId: string): Promise<any> {
   if (!sql) return {};
   
