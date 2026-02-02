@@ -70,7 +70,8 @@ export function parseUpload(buffer: Buffer, mimeType: string): ParsedUpload {
 
 function buildSummary(records: Record<string, any>[]): ParsedUpload {
   const rowCount = records.length;
-  const columns = records.length ? Object.keys(records[0]) : [];
+  const firstRecord = records[0];
+  const columns = firstRecord ? Object.keys(firstRecord as Record<string, any>) : [];
   const sampleRows = records.slice(0, 25);
 
   const columnStats: Record<string, { nonEmpty: number; topValues: Array<{ value: string; count: number }> }> = {};

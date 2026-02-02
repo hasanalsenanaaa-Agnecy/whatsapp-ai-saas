@@ -1,15 +1,25 @@
 import 'dotenv/config';
 
-const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+const rawBaseUrl =
+  process.env.BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.API_URL ||
+  `http://localhost:${process.env.PORT || '3000'}`;
+const baseUrl = rawBaseUrl.startsWith('http') ? rawBaseUrl : `http://${rawBaseUrl}`;
 
 async function request(path: string, options: RequestInit = {}) {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {})
-    }
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {})
+      }
+    });
+  } catch (error) {
+    throw new Error(`Failed to reach ${baseUrl}. Ensure the API is running and BASE_URL is set.`);
+  }
 
   const text = await response.text();
   let data: any = null;
