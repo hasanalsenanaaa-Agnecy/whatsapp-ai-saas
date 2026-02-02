@@ -16,7 +16,7 @@ import { createAPIKey, listAPIKeys, revokeAPIKey } from './security/api-key.js';
 import { getAuditLogs } from './security/audit.js';
 import { initializeDatabaseLayer, shutdownDatabaseLayer, checkDatabaseHealth } from './database/index.js';
 import { successResponse } from './api/response.js';
-import { initDatabase, isDatabaseAvailable, getClientByPhoneNumberId, getLeads, getClientStats } from './services/database.js';
+import { initDatabase, isDatabaseAvailable, getClientById, getClientByPhoneNumberId, getLeads, getClientStats } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
 import { config } from './config.js';
@@ -56,10 +56,16 @@ fastify.get('/health', async (r) => {
   return successResponse({ status: 'healthy', database: db.status, uptime: process.uptime() }, { requestId: r.id });
 });
 
+async function resolveWebhookClient(clientId: string) {
+  const byId = await getClientById(clientId);
+  if (byId) return byId;
+  return getClientByPhoneNumberId(clientId);
+}
+
 fastify.get('/webhook/whatsapp/:clientId', async (request, reply) => {
   const { clientId } = request.params as any;
   const query = request.query as any;
-  const client = await getClientByPhoneNumberId(clientId);
+  const client = await resolveWebhookClient(clientId);
   if (!client) throw new AppError(404, ErrorCode.NOT_FOUND, 'Not found');
   if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === client.verify_token) {
     reply.send(query['hub.challenge']);
@@ -71,7 +77,7 @@ fastify.get('/webhook/whatsapp/:clientId', async (request, reply) => {
 fastify.post('/webhook/whatsapp/:clientId', { onRequest: [createRateLimitMiddleware('/webhook/whatsapp')] }, async (request, reply) => {
   const { clientId } = request.params as any;
   const signature = request.headers['x-hub-signature-256'] as string;
-  const client = await getClientByPhoneNumberId(clientId);
+  const client = await resolveWebhookClient(clientId);
   if (!client) throw new AppError(404, ErrorCode.NOT_FOUND, 'Not found');
   const body = JSON.stringify(request.body);
   if (!verifyWhatsAppWebhook(body, signature, client.verify_token)) {
