@@ -15,7 +15,10 @@ const defaultConfig: RateLimitConfig = {
 const endpointLimits: Record<string, RateLimitConfig> = {
   '/auth/register': { window: 60 * 60 * 1000, max: 3 }, // 3 per hour
   '/auth/login': { window: 5 * 60 * 1000, max: 5 }, // 5 per 5 minutes
-  '/webhook/whatsapp': { window: 60 * 1000, max: 1000 } // 1000 per minute
+  '/webhook/whatsapp': { window: 60 * 1000, max: 1000 }, // 1000 per minute
+  '/api/clients/:clientId/ai/chat': { window: 60 * 1000, max: 30 },
+  '/api/clients/:clientId/ai/score-lead': { window: 60 * 1000, max: 60 },
+  '/api/clients/:clientId/ai/feedback': { window: 60 * 1000, max: 60 }
 };
 
 /**

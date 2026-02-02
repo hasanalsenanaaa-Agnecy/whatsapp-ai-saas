@@ -107,38 +107,3 @@ export async function generateSimpleResponse(
 export function isAIAvailable(): boolean {
   return !!config.anthropic.apiKey;
 }
-
-export async function generateLeadScore(
-  leadData: Record<string, any>
-): Promise<{ score: 'hot' | 'warm' | 'cold'; rationale: string }> {
-  const client = getClient();
-
-  const system = `You are a lead scoring assistant.\nReturn ONLY valid JSON.\nSchema: {"score":"hot|warm|cold","rationale":"string"}.`;
-  const user = `Lead data JSON:\n${JSON.stringify(leadData, null, 2)}`;
-
-  const response = await client.messages.create({
-    model: config.anthropic.model,
-    max_tokens: 200,
-    system,
-    messages: [{ role: 'user', content: user }]
-  });
-
-  const textBlock = response.content.find(block => block.type === 'text');
-  const raw = textBlock?.type === 'text' ? textBlock.text.trim() : '';
-
-  const jsonStart = raw.indexOf('{');
-  const jsonEnd = raw.lastIndexOf('}');
-  if (jsonStart === -1 || jsonEnd === -1) {
-    throw new Error('Invalid AI response format');
-  }
-
-  const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
-  const score = parsed.score as 'hot' | 'warm' | 'cold';
-  const rationale = typeof parsed.rationale === 'string' ? parsed.rationale : '';
-
-  if (!['hot', 'warm', 'cold'].includes(score)) {
-    throw new Error('Invalid score value');
-  }
-
-  return { score, rationale };
-}

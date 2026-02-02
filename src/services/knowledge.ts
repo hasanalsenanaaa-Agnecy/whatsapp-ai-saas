@@ -10,6 +10,8 @@ const anthropic = config.anthropic.apiKey
   ? new Anthropic({ apiKey: config.anthropic.apiKey })
   : null;
 
+const responseCache = new Map<string, { value: AIResponse; expiresAt: number }>();
+
 export interface KnowledgeItem {
   category: string;
   question: string;
@@ -42,6 +44,77 @@ const SYSTEM_PROMPT = `أنت مساعد ذكي لـ {businessName} في الس�
 المحادثة السابقة:
 {conversationHistory}`;
 
+function stableStringify(value: any): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  const keys = Object.keys(value).sort();
+  const entries = keys.map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`);
+  return `{${entries.join(',')}}`;
+}
+
+function trimConversationHistory(
+  conversationHistory: { role: string; content: string }[]
+): { role: string; content: string }[] {
+  const maxMessages = Math.max(1, config.anthropic.contextMaxMessages);
+  const maxChars = Math.max(300, config.anthropic.contextMaxChars);
+  const perMessageMax = Math.max(200, Math.floor(maxChars / maxMessages));
+
+  const trimmed = conversationHistory
+    .slice(-maxMessages)
+    .map(item => ({
+      role: item.role,
+      content: item.content.trim().slice(0, perMessageMax)
+    }));
+
+  let totalChars = trimmed.reduce((sum, item) => sum + item.content.length, 0);
+  while (trimmed.length > 1 && totalChars > maxChars) {
+    const removed = trimmed.shift();
+    totalChars -= removed?.content.length || 0;
+  }
+
+  return trimmed;
+}
+
+function buildCacheKey(params: {
+  businessName: string;
+  knowledgeBase: KnowledgeItem[];
+  customerContext: Record<string, any>;
+  conversationHistory: { role: string; content: string }[];
+  userMessage: string;
+}): string {
+  return stableStringify(params);
+}
+
+function getCachedResponse(key: string): AIResponse | null {
+  const cached = responseCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt < Date.now()) {
+    responseCache.delete(key);
+    return null;
+  }
+  return cached.value;
+}
+
+function setCachedResponse(key: string, value: AIResponse): void {
+  if (config.anthropic.cacheTtlSeconds <= 0 || config.anthropic.cacheMaxEntries <= 0) {
+    return;
+  }
+
+  if (responseCache.size >= config.anthropic.cacheMaxEntries) {
+    const oldestKey = responseCache.keys().next().value as string | undefined;
+    if (oldestKey) responseCache.delete(oldestKey);
+  }
+
+  responseCache.set(key, {
+    value,
+    expiresAt: Date.now() + config.anthropic.cacheTtlSeconds * 1000
+  });
+}
+
 export async function generateKnowledgeResponse(
   businessName: string,
   knowledgeBase: KnowledgeItem[],
@@ -58,6 +131,19 @@ export async function generateKnowledgeResponse(
     };
   }
 
+  const trimmedHistory = trimConversationHistory(conversationHistory);
+  const cacheKey = buildCacheKey({
+    businessName,
+    knowledgeBase,
+    customerContext,
+    conversationHistory: trimmedHistory,
+    userMessage
+  });
+  const cached = getCachedResponse(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   // Format knowledge base
   const kbText = knowledgeBase.length > 0
     ? knowledgeBase.map(k => `- ${k.category}: ${k.question}\n  الإجابة: ${k.answer}`).join('\n')
@@ -70,8 +156,7 @@ export async function generateKnowledgeResponse(
     .join('\n') || 'عميل جديد';
 
   // Format conversation history (last 10 messages)
-  const historyText = conversationHistory
-    .slice(-10)
+  const historyText = trimmedHistory
     .map(m => `${m.role === 'user' ? 'العميل' : 'المساعد'}: ${m.content}`)
     .join('\n') || 'بداية المحادثة';
 
@@ -99,11 +184,14 @@ export async function generateKnowledgeResponse(
     const suggestHandover = uncertainPhrases.some(phrase => answer.includes(phrase));
     const confident = !suggestHandover;
 
-    return {
+    const result = {
       answer,
       confident,
       suggestHandover
     };
+
+    setCachedResponse(cacheKey, result);
+    return result;
 
   } catch (error) {
     console.error('❌ AI error:', error);
