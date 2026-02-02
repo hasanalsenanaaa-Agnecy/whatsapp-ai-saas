@@ -24,7 +24,6 @@ vi.mock('../../services/knowledge.js', () => ({
 }));
 
 vi.mock('../../services/ai.js', () => ({
-  generateLeadScore: vi.fn().mockResolvedValue({ score: 'hot', rationale: 'ai' }),
   isAIAvailable: vi.fn().mockReturnValue(true)
 }));
 
@@ -39,6 +38,10 @@ vi.mock('../../config.js', () => ({
 vi.mock('../../security/audit.js', () => ({
   logAudit: vi.fn().mockResolvedValue(true),
   extractAuditInfo: vi.fn().mockReturnValue({})
+}));
+
+vi.mock('../../security/rate-limiter.js', () => ({
+  createRateLimitMiddleware: () => async () => true
 }));
 
 describe('AI Routes Integration', () => {
@@ -134,7 +137,7 @@ describe('AI Routes Integration', () => {
 
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
-    expect(body.data.score).toBe('hot');
+    expect(body.data.score).toBe('warm');
   });
 
   it('should record AI feedback', async () => {

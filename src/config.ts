@@ -34,8 +34,12 @@ export const config = {
   // Claude AI
   anthropic: {
     apiKey: getEnvVar('ANTHROPIC_API_KEY'),
-    model: 'claude-sonnet-4-20250514',
-    maxTokens: 1024
+    model: getEnvVar('ANTHROPIC_MODEL', 'claude-3-5-haiku-20241022'),
+    maxTokens: parseInt(getEnvVar('ANTHROPIC_MAX_TOKENS', '512'), 10),
+    contextMaxMessages: parseInt(getEnvVar('AI_CONTEXT_MAX_MESSAGES', '6'), 10),
+    contextMaxChars: parseInt(getEnvVar('AI_CONTEXT_MAX_CHARS', '1200'), 10),
+    cacheTtlSeconds: parseInt(getEnvVar('AI_CACHE_TTL_SECONDS', '300'), 10),
+    cacheMaxEntries: parseInt(getEnvVar('AI_CACHE_MAX_ENTRIES', '500'), 10)
   },
 
   // Google Sheets

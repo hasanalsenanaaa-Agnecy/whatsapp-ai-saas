@@ -4,8 +4,9 @@ import { AppError, ErrorCode } from '../security/error-handler.js';
 import { logAudit, extractAuditInfo } from '../security/audit.js';
 import { getClientById, updateClient, updateLead, createAIFeedback, listAIFeedback } from '../services/database.js';
 import { generateKnowledgeResponse, scoreLead } from '../services/knowledge.js';
-import { generateLeadScore, isAIAvailable } from '../services/ai.js';
+import { isAIAvailable } from '../services/ai.js';
 import { config } from '../config.js';
+import { createRateLimitMiddleware } from '../security/rate-limiter.js';
 import {
   AIChatSchema,
   AIFeedbackSchema,
@@ -14,6 +15,14 @@ import {
 } from '../schemas/validation.js';
 
 export async function registerAIRoutes(fastify: FastifyInstance) {
+  const withClientRateLimit = (endpoint: string) => {
+    const limiter = createRateLimitMiddleware(endpoint);
+    return async (request: any, reply: any) => {
+      request.clientId = request.user?.clientId || request.clientId;
+      return limiter(request, reply);
+    };
+  };
+
   fastify.get<{ Params: { clientId: string } }>(
     '/api/clients/:clientId/knowledge',
     { onRequest: [(fastify as any).authenticate] },
@@ -89,7 +98,7 @@ export async function registerAIRoutes(fastify: FastifyInstance) {
 
   fastify.post<{ Params: { clientId: string }; Body: any }>(
     '/api/clients/:clientId/ai/chat',
-    { onRequest: [(fastify as any).authenticate] },
+    { onRequest: [(fastify as any).authenticate, withClientRateLimit('/api/clients/:clientId/ai/chat')] },
     async (request: any) => {
       const { clientId } = request.params;
       const user = (request as any).user;
@@ -123,7 +132,7 @@ export async function registerAIRoutes(fastify: FastifyInstance) {
 
   fastify.post<{ Params: { clientId: string }; Body: any }>(
     '/api/clients/:clientId/ai/score-lead',
-    { onRequest: [(fastify as any).authenticate] },
+    { onRequest: [(fastify as any).authenticate, withClientRateLimit('/api/clients/:clientId/ai/score-lead')] },
     async (request: any) => {
       const { clientId } = request.params;
       const user = (request as any).user;
@@ -135,17 +144,7 @@ export async function registerAIRoutes(fastify: FastifyInstance) {
       const input = AIScoreLeadSchema.parse(request.body);
       const data = input.leadData || {};
 
-      let scoreResult: { score: 'hot' | 'warm' | 'cold'; rationale?: string };
-
-      if (isAIAvailable()) {
-        try {
-          scoreResult = await generateLeadScore(data);
-        } catch (error) {
-          scoreResult = { score: scoreLead(data), rationale: 'fallback_rule_based' };
-        }
-      } else {
-        scoreResult = { score: scoreLead(data), rationale: 'rule_based' };
-      }
+      const scoreResult = { score: scoreLead(data), rationale: 'rule_based' };
 
       if (input.leadId) {
         await updateLead(input.leadId, { score: scoreResult.score });
@@ -161,7 +160,7 @@ export async function registerAIRoutes(fastify: FastifyInstance) {
 
   fastify.post<{ Params: { clientId: string }; Body: any }>(
     '/api/clients/:clientId/ai/feedback',
-    { onRequest: [(fastify as any).authenticate] },
+    { onRequest: [(fastify as any).authenticate, withClientRateLimit('/api/clients/:clientId/ai/feedback')] },
     async (request: any, reply: any) => {
       const { clientId } = request.params;
       const user = (request as any).user;
