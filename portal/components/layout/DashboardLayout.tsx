@@ -9,7 +9,7 @@ import {
   Key,
   FileText,
   Brain,
-  MessageCircleStar,
+  MessageCircle,
   BarChart3,
   Workflow,
   LogOut,
@@ -28,7 +28,7 @@ const navItems = [
   { href: '/analytics', label: 'تحليلات متقدمة', icon: BarChart3 },
   { href: '/automation', label: 'الأتمتة', icon: Workflow },
   { href: '/ai', label: 'الذكاء الاصطناعي', icon: Brain },
-  { href: '/ai/feedback', label: 'تقييمات الذكاء الاصطناعي', icon: MessageCircleStar },
+  { href: '/ai/feedback', label: 'تقييمات الذكاء الاصطناعي', icon: MessageCircle },
   { href: '/api-keys', label: 'مفاتيح API', icon: Key },
   { href: '/audit-logs', label: 'سجل الأحداث', icon: FileText }
 ]

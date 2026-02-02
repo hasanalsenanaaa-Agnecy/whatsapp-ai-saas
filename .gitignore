@@ -1,8 +1,12 @@
 node_modules/
 .next/
+portal/.next/
 .env
+.env.local
+portal/.env.local
 whatsapp-ai-saas.zip
 dist/
 build/
 *.log
 *.tmp
+coverage/
