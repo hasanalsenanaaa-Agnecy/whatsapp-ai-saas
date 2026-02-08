@@ -97,7 +97,7 @@ export async function handleIncomingMessage(
       break;
       
     case 'chat':
-      await handleChat(client, conv, message, clientMessages, accessToken);
+      return; // No response after lead captured
       break;
       
     case 'handover':
