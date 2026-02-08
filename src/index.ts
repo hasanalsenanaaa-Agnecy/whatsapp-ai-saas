@@ -95,7 +95,7 @@ fastify.post('/webhook/whatsapp', { onRequest: [createRateLimitMiddleware('/webh
     throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid signature');
   }
   setImmediate(() => {
-    handleIncomingMessage(client.id, request.body, client.access_token).catch(err => {
+    handleIncomingMessage(phoneNumberId, request.body, client.access_token).catch(err => {
       console.error('Error:', err);
     });
   });
