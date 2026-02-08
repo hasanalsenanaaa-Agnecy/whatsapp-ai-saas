@@ -100,7 +100,8 @@ export async function handleIncomingMessage(
       return; // No response after lead captured
       break;
       
-    case 'handover':
+    case 'handover': return; // No response
+    case 'handover_disabled':
       // Already in handover, notify again
       await sendWhatsAppMessage(
         customerPhone,
