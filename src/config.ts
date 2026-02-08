@@ -34,7 +34,7 @@ export const config = {
   // Claude AI
   anthropic: {
     apiKey: getEnvVar('ANTHROPIC_API_KEY'),
-    model: getEnvVar('ANTHROPIC_MODEL', 'claude-3-5-haiku-20241022'),
+    model: getEnvVar('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001'),
     maxTokens: parseInt(getEnvVar('ANTHROPIC_MAX_TOKENS', '512'), 10),
     contextMaxMessages: parseInt(getEnvVar('AI_CONTEXT_MAX_MESSAGES', '6'), 10),
     contextMaxChars: parseInt(getEnvVar('AI_CONTEXT_MAX_CHARS', '1200'), 10),
