@@ -69,6 +69,23 @@ function extractPhoneNumberId(payload: any): string | null {
   return metadata?.phone_number_id || null;
 }
 
+function extractCustomerPhone(payload: any): string | null {
+  const entry = payload?.entry?.[0];
+  const change = entry?.changes?.[0];
+  const messages = change?.value?.messages;
+  return messages?.[0]?.from || null;
+}
+
+function extractMessageText(payload: any): string | null {
+  const entry = payload?.entry?.[0];
+  const change = entry?.changes?.[0];
+  const messages = change?.value?.messages;
+  const msg = messages?.[0];
+  if (msg?.type === 'text') return msg.text?.body || null;
+  if (msg?.type === 'audio') return '[voice]';
+  return null;
+}
+
 fastify.get('/webhook/whatsapp', async (request, reply) => {
   const query = request.query as any;
   if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === config.whatsapp.verifyToken) {
@@ -95,9 +112,13 @@ fastify.post('/webhook/whatsapp', { onRequest: [createRateLimitMiddleware('/webh
     throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid signature');
   }
   setImmediate(() => {
-    handleIncomingMessage(phoneNumberId, request.body, client.access_token).catch(err => {
-      console.error('Error:', err);
-    });
+    const customerPhone = extractCustomerPhone(request.body);
+    const messageText = extractMessageText(request.body);
+    if (customerPhone && messageText) {
+      handleIncomingMessage(phoneNumberId, customerPhone, messageText, client.access_token).catch(err => {
+        console.error('Error:', err);
+      });
+    }
   });
   reply.code(200).send({ ok: true });
 });
@@ -130,9 +151,13 @@ fastify.post('/webhook/whatsapp/:clientId', { onRequest: [createRateLimitMiddlew
     throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid signature');
   }
   setImmediate(() => {
-    handleIncomingMessage(clientId, request.body, client.access_token).catch(err => {
-      console.error('Error:', err);
-    });
+    const customerPhone = extractCustomerPhone(request.body);
+    const messageText = extractMessageText(request.body);
+    if (customerPhone && messageText) {
+      handleIncomingMessage(clientId, customerPhone, messageText, client.access_token).catch(err => {
+        console.error('Error:', err);
+      });
+    }
   });
   reply.code(200).send({ ok: true });
 });
