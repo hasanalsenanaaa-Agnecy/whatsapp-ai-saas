@@ -1,253 +1,98 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
-import rateLimit from '@fastify/rate-limit';
-import multipart from '@fastify/multipart';
-import { initializeSecurity } from './security/init.js';
-import { registerAuthRoutes } from './routes/auth.routes.js';
-import { registerClientRoutes } from './routes/clients.routes.js';
-import { registerAdminRoutes } from './routes/admin.routes.js';
-import { registerAIRoutes } from './routes/ai.routes.js';
-import { registerAutomationRoutes } from './routes/automation.routes.js';
-import { verifyWhatsAppWebhook } from './security/webhook-verification.js';
-import { logAudit, extractAuditInfo } from './security/audit.js';
-import { AppError, ErrorCode } from './security/error-handler.js';
-import { createRateLimitMiddleware } from './security/rate-limiter.js';
-import { createAPIKey, listAPIKeys, revokeAPIKey } from './security/api-key.js';
-import { getAuditLogs } from './security/audit.js';
-import { initializeDatabaseLayer, shutdownDatabaseLayer, checkDatabaseHealth } from './database/index.js';
-import { successResponse } from './api/response.js';
-import { initDatabase, isDatabaseAvailable, getClientById, getClientByPhoneNumberId, getLeads, getClientStats } from './services/database.js';
+import { initDatabase, getClientByPhoneNumberId } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
-import { config } from './config.js';
+import crypto from 'crypto';
 
 const fastify = Fastify({
   logger: {
     level: process.env.LOG_LEVEL || 'info',
     transport: process.env.NODE_ENV !== 'production' ? { target: 'pino-pretty' } : undefined
-  },
-  requestIdHeader: 'x-request-id'
+  }
 });
 
 await initDatabase();
 await initGoogleSheets();
-await fastify.register(rateLimit, { max: 100, timeWindow: '1 minute' });
-await fastify.register(multipart, {
-  limits: {
-    fileSize: config.uploads.maxSizeMb * 1024 * 1024
-  }
-});
-await initializeSecurity(fastify);
-await initializeDatabaseLayer();
-await registerAuthRoutes(fastify);
-await registerClientRoutes(fastify);
-await registerAdminRoutes(fastify);
-await registerAIRoutes(fastify);
-await registerAutomationRoutes(fastify);
-
-fastify.get('/', async (r) => successResponse({
-  service: 'WhatsApp AI SaaS',
-  version: '4.0.0',
-  status: 'operational'
-}, { requestId: r.id }));
-
-fastify.get('/health', async (r) => {
-  const db = await checkDatabaseHealth();
-  return successResponse({ status: 'healthy', database: db.status, uptime: process.uptime() }, { requestId: r.id });
-});
-
-async function resolveWebhookClient(clientId: string) {
-  const byId = await getClientById(clientId);
-  if (byId) return byId;
-  return getClientByPhoneNumberId(clientId);
-}
 
 function extractPhoneNumberId(payload: any): string | null {
-  const entry = payload?.entry?.[0];
-  const change = entry?.changes?.[0];
-  const metadata = change?.value?.metadata;
-  return metadata?.phone_number_id || null;
+  return payload?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id || null;
 }
 
 function extractCustomerPhone(payload: any): string | null {
-  const entry = payload?.entry?.[0];
-  const change = entry?.changes?.[0];
-  const messages = change?.value?.messages;
-  return messages?.[0]?.from || null;
+  return payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || null;
 }
 
 function extractMessageText(payload: any): string | null {
-  const entry = payload?.entry?.[0];
-  const change = entry?.changes?.[0];
-  const messages = change?.value?.messages;
-  const msg = messages?.[0];
-  if (msg?.type === 'text') return msg.text?.body || null;
-  if (msg?.type === 'audio') return '[voice]';
+  const message = payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+  if (!message) return null;
+  
+  if (message.type === 'interactive') {
+    if (message.interactive?.button_reply) return message.interactive.button_reply.title;
+    if (message.interactive?.list_reply) return message.interactive.list_reply.title;
+  }
+  if (message.type === 'text') return message.text?.body || null;
+  if (message.type === 'audio') return '[صوت]';
   return null;
 }
 
+function verifyWebhookSignature(body: string, signature: string, secret: string): boolean {
+  if (!signature || !secret) return false;
+  const expectedSignature = 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+}
+
+fastify.get('/', async () => ({ service: 'WhatsApp AI Receptionist', status: 'running', version: '1.0.0' }));
+fastify.get('/health', async () => ({ status: 'healthy', uptime: process.uptime() }));
+
 fastify.get('/webhook/whatsapp', async (request, reply) => {
   const query = request.query as any;
-  if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === config.whatsapp.verifyToken) {
-    reply.send(query['hub.challenge']);
-  } else {
-    throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid token');
+  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+  if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === verifyToken) {
+    console.log('✅ Webhook verified');
+    return reply.send(query['hub.challenge']);
   }
+  return reply.code(403).send('Forbidden');
 });
 
-fastify.post('/webhook/whatsapp', { onRequest: [createRateLimitMiddleware('/webhook/whatsapp')] }, async (request, reply) => {
+fastify.post('/webhook/whatsapp', async (request, reply) => {
   const signature = request.headers['x-hub-signature-256'] as string;
   const phoneNumberId = extractPhoneNumberId(request.body);
-  if (!phoneNumberId) throw new AppError(400, ErrorCode.INVALID_INPUT, 'Missing phone_number_id');
-  const client = await getClientByPhoneNumberId(phoneNumberId);
-  if (!client) throw new AppError(404, ErrorCode.NOT_FOUND, 'Not found');
-  const body = JSON.stringify(request.body);
-  if (!verifyWhatsAppWebhook(body, signature, client.verify_token)) {
-    await logAudit({
-      clientId: client.id,
-      action: 'webhook_signature_verification_failed',
-      status: 'denied',
-      ...extractAuditInfo(request)
-    });
-    throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid signature');
-  }
-  setImmediate(() => {
-    const customerPhone = extractCustomerPhone(request.body);
-    const messageText = extractMessageText(request.body);
-    if (customerPhone && messageText) {
-      handleIncomingMessage(phoneNumberId, customerPhone, messageText, client.access_token).catch(err => {
-        console.error('Error:', err);
-      });
+  
+  reply.code(200).send({ ok: true });
+  
+  setImmediate(async () => {
+    try {
+      if (!phoneNumberId) return;
+      
+      const customerPhone = extractCustomerPhone(request.body);
+      const messageText = extractMessageText(request.body);
+      if (!customerPhone || !messageText) return;
+      
+      const client = await getClientByPhoneNumberId(phoneNumberId);
+      if (!client) {
+        console.error(`❌ No client found for: ${phoneNumberId}`);
+        return;
+      }
+      
+      const body = JSON.stringify(request.body);
+      if (!verifyWebhookSignature(body, signature, client.verify_token)) {
+        console.error('❌ Invalid signature');
+        return;
+      }
+      
+      console.log(`📩 Message from ${customerPhone}: ${messageText}`);
+      await handleIncomingMessage(phoneNumberId, customerPhone, messageText, client.access_token);
+    } catch (error) {
+      console.error('❌ Error:', error);
     }
   });
-  reply.code(200).send({ ok: true });
 });
-
-fastify.get('/webhook/whatsapp/:clientId', async (request, reply) => {
-  const { clientId } = request.params as any;
-  const query = request.query as any;
-  const client = await resolveWebhookClient(clientId);
-  if (!client) throw new AppError(404, ErrorCode.NOT_FOUND, 'Not found');
-  if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === client.verify_token) {
-    reply.send(query['hub.challenge']);
-  } else {
-    throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid token');
-  }
-});
-
-fastify.post('/webhook/whatsapp/:clientId', { onRequest: [createRateLimitMiddleware('/webhook/whatsapp')] }, async (request, reply) => {
-  const { clientId } = request.params as any;
-  const signature = request.headers['x-hub-signature-256'] as string;
-  const client = await resolveWebhookClient(clientId);
-  if (!client) throw new AppError(404, ErrorCode.NOT_FOUND, 'Not found');
-  const body = JSON.stringify(request.body);
-  if (!verifyWhatsAppWebhook(body, signature, client.verify_token)) {
-    await logAudit({
-      clientId,
-      action: 'webhook_signature_verification_failed',
-      status: 'denied',
-      ...extractAuditInfo(request)
-    });
-    throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid signature');
-  }
-  setImmediate(() => {
-    const customerPhone = extractCustomerPhone(request.body);
-    const messageText = extractMessageText(request.body);
-    if (customerPhone && messageText) {
-      handleIncomingMessage(clientId, customerPhone, messageText, client.access_token).catch(err => {
-        console.error('Error:', err);
-      });
-    }
-  });
-  reply.code(200).send({ ok: true });
-});
-
-fastify.post('/api/clients/:clientId/api-keys', { onRequest: [fastify.authenticate] }, async (request: any, reply) => {
-  const { clientId } = request.params;
-  const user = request.user;
-  if (user.clientId !== clientId) throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
-  const { name } = request.body;
-  if (!name) throw new AppError(400, ErrorCode.INVALID_INPUT, 'Name required');
-  const result = await createAPIKey(clientId, name);
-  if (!result) throw new AppError(500, ErrorCode.INTERNAL_ERROR, 'Failed');
-  await logAudit({
-    clientId,
-    action: 'api_key_created',
-    resourceType: 'api_key',
-    resourceId: result.id,
-    status: 'success',
-    ...extractAuditInfo(request)
-  });
-  reply.code(201);
-  return successResponse({ id: result.id, key: result.key }, { requestId: request.id });
-});
-
-fastify.get('/api/clients/:clientId/api-keys', { onRequest: [fastify.authenticate] }, async (request: any) => {
-  const { clientId } = request.params;
-  const user = request.user;
-  if (user.clientId !== clientId) throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
-  const keys = await listAPIKeys(clientId);
-  return successResponse(keys, { requestId: request.id });
-});
-
-fastify.delete('/api/clients/:clientId/api-keys/:keyId', { onRequest: [fastify.authenticate] }, async (request: any) => {
-  const { clientId, keyId } = request.params;
-  const user = request.user;
-  if (user.clientId !== clientId) throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
-  const success = await revokeAPIKey(keyId);
-  if (!success) throw new AppError(500, ErrorCode.INTERNAL_ERROR, 'Failed');
-  await logAudit({
-    clientId,
-    action: 'api_key_revoked',
-    resourceType: 'api_key',
-    resourceId: keyId,
-    status: 'success',
-    ...extractAuditInfo(request)
-  });
-  return successResponse({ message: 'Revoked' }, { requestId: request.id });
-});
-
-fastify.get('/api/clients/:clientId/audit-logs', { onRequest: [fastify.authenticate] }, async (request: any) => {
-  const { clientId } = request.params;
-  const user = request.user;
-  if (user.clientId !== clientId) throw new AppError(403, ErrorCode.FORBIDDEN, 'Unauthorized');
-  const logs = await getAuditLogs(clientId);
-  return successResponse(logs, { requestId: request.id });
-});
-
-const gracefulShutdown = async (signal: string) => {
-  console.log(`\n📡 Received ${signal}, shutting down...`);
-  try {
-    await fastify.close();
-    await shutdownDatabaseLayer();
-    console.log('✅ Shutdown complete');
-    process.exit(0);
-  } catch (error) {
-    console.error('❌ Error:', error);
-    process.exit(1);
-  }
-};
-
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 const start = async () => {
-  try {
-    const port = parseInt(process.env.PORT || '3000', 10);
-    await fastify.listen({ port, host: '0.0.0.0' });
-    console.log(`
-🚀 WhatsApp AI SaaS v4.0.0 (Phase 1, 2 & 3 Complete)
-════════════════════════════════════════════════════════════════
-📡 Server: http://localhost:${port}
-🔒 Phase 1: Security ✅
-🗄️  Phase 2: Database ✅
-📊 Phase 3: API & Backend ✅
-════════════════════════════════════════════════════════════════
-    `);
-  } catch (err) {
-    fastify.log.error(err);
-    process.exit(1);
-  }
+  const port = parseInt(process.env.PORT || '3000', 10);
+  await fastify.listen({ port, host: '0.0.0.0' });
+  console.log(`🚀 WhatsApp AI Receptionist running on port ${port}`);
 };
 
 start();
