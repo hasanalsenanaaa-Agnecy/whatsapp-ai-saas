@@ -37,9 +37,30 @@ function extractMessageText(payload: any): string | null {
 }
 
 function verifyWebhookSignature(body: string, signature: string, secret: string): boolean {
-  if (!signature || !secret) return false;
-  const expectedSignature = 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+  if (!signature || !secret) {
+    console.log('⚠️ Missing signature or secret');
+    return false;
+  }
+  
+  try {
+    const expectedSignature = 'sha256=' + crypto
+      .createHmac('sha256', secret)
+      .update(body)
+      .digest('hex');
+    
+    // Compare using constant-time comparison
+    if (signature.length !== expectedSignature.length) {
+      return false;
+    }
+    
+    return crypto.timingSafeEqual(
+      Buffer.from(signature, 'utf8'),
+      Buffer.from(expectedSignature, 'utf8')
+    );
+  } catch (error) {
+    console.error('❌ Signature verification error:', error);
+    return false;
+  }
 }
 
 fastify.get('/', async () => ({ service: 'WhatsApp AI Receptionist', status: 'running', version: '1.0.0' }));
@@ -75,8 +96,11 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
         return;
       }
       
+      // Use WHATSAPP_APP_SECRET env var, fallback to client.verify_token
+      const appSecret = process.env.WHATSAPP_APP_SECRET || client.verify_token;
       const body = JSON.stringify(request.body);
-      if (false && !verifyWebhookSignature(body, signature, client.verify_token)) {
+      
+      if (!verifyWebhookSignature(body, signature, appSecret)) {
         console.error('❌ Invalid signature');
         return;
       }

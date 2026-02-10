@@ -15,7 +15,7 @@ export interface ClientMessages {
 }
 
 export const REAL_ESTATE_MESSAGES: ClientMessages = {
-  welcome: `أهلاً وسهلاً! ��\n\nشكراً تواصلك مع {businessName}\n\nكيف أقدر أساعدك؟`,
+  welcome: `أهلاً وسهلاً! 👋\n\nشكراً تواصلك مع {businessName}\n\nكيف أقدر أساعدك؟`,
   welcomeButtons: [
     { id: 'buy', title: 'أبي أشتري عقار' },
     { id: 'sell', title: 'أبي أبيع عقار' },
@@ -27,7 +27,7 @@ export const REAL_ESTATE_MESSAGES: ClientMessages = {
     { text: 'في أي مدينة؟', options: ['الدمام', 'الخبر', 'الظهران', 'القطيف'], field: 'city' },
     { text: 'كم ميزانيتك؟', options: ['أقل من 500 ألف', '500 ألف - مليون', 'مليون - 2 مليون', 'أكثر من 2 مليون'], field: 'budget' }
   ],
-  thankYou: 'تمام يا {name}! ✅\n\nمعلوماتك وصلت. مستشارنا بيتواصل معك قريب إن شاء الله.',
+  thankYou: 'تمام يا {name}! ✅\n\nمعلوماتك وصلت. مستشارنا بيتواصل معك قريب.',
   invalidInput: 'اختر من الخيارات المتاحة 👆',
   agentNotification: '🏠 *عميل جديد!*\n\n👤 {name}\n📱 {phone}\n\n📋 التفاصيل:\n{details}\n\n⏰ {time}'
 };
@@ -41,17 +41,21 @@ export const CAR_DEALERSHIP_MESSAGES: ClientMessages = {
   ],
   askName: 'ممتاز! وش اسمك الكريم؟',
   questions: [
-    { text: 'وش نوع السيارة؟', options: ['سيدان', 'جيب', 'بيك أب', 'رياضية'], field: 'car_type' },
-    { text: 'كم ميزانيتك؟', options: ['أقل من 50 ألف', '50 - 100 ألف', '100 - 150 ألف', 'أكثر من 150 ألف'], field: 'budget' },
+    { text: 'وش نوع السيارة؟', options: ['سيدان', 'جيب', 'بيك أب'], field: 'car_type' },
+    { text: 'كم ميزانيتك؟', options: ['أقل من 50 ألف', '50 - 100 ألف', 'أكثر من 100 ألف'], field: 'budget' },
     { text: 'جديدة ولا مستعملة؟', options: ['جديدة', 'مستعملة'], field: 'condition' }
   ],
-  thankYou: 'تمام يا {name}! ✅\n\nمعلوماتك وصلت. مستشارنا بيتواصل معك قريب إن شاء الله.',
+  thankYou: 'تمام يا {name}! ✅\n\nمعلوماتك وصلت. مستشارنا بيتواصل معك قريب.',
   invalidInput: 'اختر من الخيارات المتاحة 👆',
   agentNotification: '🚗 *عميل جديد!*\n\n👤 {name}\n📱 {phone}\n\n📋 التفاصيل:\n{details}\n\n⏰ {time}'
 };
 
 export const GENERIC_MESSAGES: ClientMessages = {
   welcome: `أهلاً وسهلاً! 👋\n\nشكراً تواصلك مع {businessName}`,
+  welcomeButtons: [
+    { id: 'inquiry', title: 'استفسار' },
+    { id: 'service', title: 'طلب خدمة' }
+  ],
   askName: 'وش اسمك الكريم؟',
   questions: [],
   thankYou: 'تمام يا {name}! ✅\n\nبنتواصل معك قريب.',
