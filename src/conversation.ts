@@ -1,35 +1,20 @@
-import { sendWhatsAppMessage } from './services/whatsapp.js';
-import { 
-  getConversation, 
-  saveConversation, 
-  updateConversation,
-  createLead,
-  createAppointment,
-  getClientByPhoneNumberId
-} from './services/database.js';
-import { 
-  generateKnowledgeResponse, 
-  detectHandoverIntent,
-  scoreLead 
-} from './services/knowledge.js';
+import { sendWhatsAppMessage, sendWhatsAppButtons, sendWhatsAppList } from './services/whatsapp.js';
+import { getConversation, saveConversation, createLead, getClientByPhoneNumberId } from './services/database.js';
 import { formatMessage, getDefaultMessages, ClientMessages } from './messages.js';
 import { saveLeadToSheet } from './services/googleSheets.js';
-
-// ============================================================
-// CONVERSATION HANDLER (Multi-tenant, Pro Level)
-// ============================================================
 
 interface ConversationState {
   clientId: string;
   phone: string;
   messages: { role: string; content: string }[];
-  state: 'welcome' | 'qualifying' | 'contact' | 'chat' | 'handover' | 'appointment';
+  state: 'welcome' | 'ask_name' | 'questions' | 'completed';
   step: number;
   data: Record<string, any>;
-  leadCaptured: boolean;
-  handoverRequested: boolean;
-  leadId?: number;
+  createdAt: string;
+  updatedAt: string;
 }
+
+const CONVERSATION_TIMEOUT_HOURS = 24;
 
 export async function handleIncomingMessage(
   phoneNumberId: string,
@@ -37,12 +22,9 @@ export async function handleIncomingMessage(
   message: string,
   accessToken: string
 ): Promise<void> {
-  
-  // Get client config from database
   const client = await getClientByPhoneNumberId(phoneNumberId);
-  
   if (!client) {
-    console.error(`❌ No client found for phone_number_id: ${phoneNumberId}`);
+    console.error(`❌ No client found for: ${phoneNumberId}`);
     return;
   }
 
@@ -50,356 +32,222 @@ export async function handleIncomingMessage(
     ? client.messages
     : getDefaultMessages(client.industry);
 
-  // Get or create conversation
   let conv = await getConversation(client.id, customerPhone);
+  const now = new Date().toISOString();
   
-  if (!conv) {
+  const shouldReset = checkShouldReset(conv, message);
+  
+  if (!conv || shouldReset) {
     conv = {
       clientId: client.id,
       phone: customerPhone,
       messages: [],
       state: 'welcome',
       step: 0,
-      data: { messageCount: 0 },
-      leadCaptured: false,
-      handoverRequested: false
+      data: { whatsappPhone: customerPhone },
+      createdAt: now,
+      updatedAt: now
     };
   }
 
-  // Track message count
-  conv.data.messageCount = (conv.data.messageCount || 0) + 1;
-
-  // Add user message to history
+  conv.updatedAt = now;
   conv.messages.push({ role: 'user', content: message });
 
-  // Check for handover request
-  if (detectHandoverIntent(message)) {
-    await handleHandover(client, conv, clientMessages, accessToken);
-    return;
+  const backResult = handleBackCommand(message, conv);
+  if (backResult.handled) {
+    conv.state = backResult.newState as any;
+    conv.step = backResult.newStep;
   }
 
-  // Route based on state
   switch (conv.state) {
     case 'welcome':
       await handleWelcome(client, conv, clientMessages, accessToken);
       break;
-      
-    case 'qualifying':
-      await handleQualifying(client, conv, message, clientMessages, accessToken);
+    case 'ask_name':
+      await handleAskName(client, conv, message, clientMessages, accessToken);
       break;
-      
-    case 'contact':
-      await handleContact(client, conv, message, clientMessages, accessToken);
+    case 'questions':
+      await handleQuestions(client, conv, message, clientMessages, accessToken);
       break;
-      
-    case 'appointment':
-      await handleAppointment(client, conv, message, clientMessages, accessToken);
-      break;
-      
-    case 'chat':
-      return; // No response after lead captured
-      break;
-      
-    case 'handover': return; // No response
-    case 'handover_disabled':
-      // Already in handover, notify again
-      await sendWhatsAppMessage(
-        customerPhone,
-        'المستشار بيتواصل معك قريب إن شاء الله 👍',
-        accessToken,
-        client.phone_number_id
-      );
+    case 'completed':
       break;
   }
 
-  // Save conversation
   await saveConversation(conv);
 }
 
-// ============================================================
-// STATE HANDLERS
-// ============================================================
-
-async function handleWelcome(
-  client: any,
-  conv: ConversationState,
-  messages: ClientMessages,
-  accessToken: string
-): Promise<void> {
-  const welcomeMsg = formatMessage(messages.welcome, {
-    businessName: client.name
-  });
-
-  await sendWhatsAppMessage(conv.phone, welcomeMsg, accessToken, client.phone_number_id);
+function checkShouldReset(conv: ConversationState | null, message: string): boolean {
+  if (!conv) return true;
+  const lastUpdate = new Date(conv.updatedAt);
+  const hoursSinceUpdate = (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60);
+  if (hoursSinceUpdate > CONVERSATION_TIMEOUT_HOURS) return true;
   
-  conv.messages.push({ role: 'assistant', content: welcomeMsg });
-  conv.state = 'qualifying';
-  conv.step = 0;
+  const restartKeywords = ['restart', 'start over', 'من جديد', 'ابدا من جديد', 'reset', 'بداية'];
+  return restartKeywords.some(keyword => message.toLowerCase().includes(keyword));
 }
 
-async function handleQualifying(
-  client: any,
-  conv: ConversationState,
-  message: string,
-  messages: ClientMessages,
-  accessToken: string
-): Promise<void> {
-  const questions = client.questions?.length > 0 
-    ? client.questions 
-    : messages.questions;
-    
+function handleBackCommand(message: string, conv: ConversationState): { handled: boolean; newState: string; newStep: number } {
+  const backKeywords = ['back', 'رجوع', 'السابق', 'ارجع', 'previous'];
+  if (!backKeywords.some(keyword => message.toLowerCase().includes(keyword))) {
+    return { handled: false, newState: conv.state, newStep: conv.step };
+  }
+  
+  if (conv.state === 'questions' && conv.step > 0) {
+    return { handled: true, newState: 'questions', newStep: conv.step - 1 };
+  } else if (conv.state === 'questions' && conv.step === 0) {
+    return { handled: true, newState: 'ask_name', newStep: 0 };
+  } else if (conv.state === 'ask_name') {
+    return { handled: true, newState: 'welcome', newStep: 0 };
+  }
+  return { handled: false, newState: conv.state, newStep: conv.step };
+}
+
+async function handleWelcome(client: any, conv: ConversationState, messages: ClientMessages, accessToken: string): Promise<void> {
+  const welcomeMsg = formatMessage(messages.welcome, { businessName: client.name });
+
+  if (messages.welcomeButtons && messages.welcomeButtons.length > 0) {
+    await sendWhatsAppButtons(conv.phone, welcomeMsg, messages.welcomeButtons, accessToken, client.phone_number_id);
+  } else {
+    await sendWhatsAppMessage(conv.phone, welcomeMsg, accessToken, client.phone_number_id);
+  }
+  
+  conv.messages.push({ role: 'assistant', content: welcomeMsg });
+  conv.state = 'ask_name';
+}
+
+async function handleAskName(client: any, conv: ConversationState, message: string, messages: ClientMessages, accessToken: string): Promise<void> {
+  if (!conv.data.nameAsked) {
+    const askNameMsg = messages.askName || 'ممتاز! وش اسمك الكريم؟';
+    await sendWhatsAppMessage(conv.phone, askNameMsg, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: askNameMsg });
+    conv.data.nameAsked = true;
+    return;
+  }
+  
+  const name = message.trim();
+  if (name.length < 2 || /^\d+$/.test(name)) {
+    await sendWhatsAppMessage(conv.phone, 'أرسل لي اسمك الكريم 😊', accessToken, client.phone_number_id);
+    return;
+  }
+  
+  conv.data.name = name;
+  conv.data.phone = conv.phone;
+  conv.state = 'questions';
+  conv.step = 0;
+  
+  await sendQuestion(client, conv, messages, accessToken);
+}
+
+async function handleQuestions(client: any, conv: ConversationState, message: string, messages: ClientMessages, accessToken: string): Promise<void> {
+  const questions = client.questions?.length > 0 ? client.questions : messages.questions;
   const currentQuestion = questions[conv.step];
   
   if (!currentQuestion) {
-    // No more questions, ask for contact
-    conv.state = 'contact';
-    await sendWhatsAppMessage(conv.phone, messages.askContact, accessToken, client.phone_number_id);
-    conv.messages.push({ role: 'assistant', content: messages.askContact });
+    await completeLead(client, conv, messages, accessToken);
     return;
   }
 
-  // Validate input
-  const inputNum = parseInt(message.trim()) - 1;
   const options = currentQuestion.options || [];
+  let selectedOption: string | null = null;
+  const lowerMessage = message.toLowerCase().trim();
   
-  if (inputNum < 0 || inputNum >= options.length) {
-    await sendWhatsAppMessage(conv.phone, messages.invalidInput, accessToken, client.phone_number_id);
+  selectedOption = options.find((opt: string) => opt.toLowerCase() === lowerMessage || opt === message.trim());
+  
+  if (!selectedOption) {
+    const num = parseInt(message.trim());
+    if (num >= 1 && num <= options.length) selectedOption = options[num - 1];
+  }
+  
+  if (!selectedOption) {
+    await sendWhatsAppMessage(conv.phone, messages.invalidInput || 'اختر من الخيارات 👆', accessToken, client.phone_number_id);
+    await sendQuestion(client, conv, messages, accessToken);
     return;
   }
-
-  // Save answer
-  const fieldNames = ['interest', 'budget', 'preference', 'extra1', 'extra2'];
-  const fieldName = fieldNames[conv.step] || `answer_${conv.step}`;
-  conv.data[fieldName] = options[inputNum];
-
-  // Next question or contact
+  
+  const fieldName = currentQuestion.field || `answer_${conv.step}`;
+  conv.data[fieldName] = selectedOption;
   conv.step++;
   
   const nextQuestion = questions[conv.step];
-  
   if (nextQuestion) {
-    await sendWhatsAppMessage(conv.phone, nextQuestion.text, accessToken, client.phone_number_id);
-    conv.messages.push({ role: 'assistant', content: nextQuestion.text });
+    await sendQuestion(client, conv, messages, accessToken);
   } else {
-    conv.state = 'contact';
-    await sendWhatsAppMessage(conv.phone, messages.askContact, accessToken, client.phone_number_id);
-    conv.messages.push({ role: 'assistant', content: messages.askContact });
+    await completeLead(client, conv, messages, accessToken);
   }
 }
 
-async function handleContact(
-  client: any,
-  conv: ConversationState,
-  message: string,
-  messages: ClientMessages,
-  accessToken: string
-): Promise<void> {
-  // Parse contact info
-  const parts = message.split(/[,،]/).map(p => p.trim());
+async function sendQuestion(client: any, conv: ConversationState, messages: ClientMessages, accessToken: string): Promise<void> {
+  const questions = client.questions?.length > 0 ? client.questions : messages.questions;
+  const question = questions[conv.step];
+  if (!question) return;
   
-  if (!parts[0] || parts[0].length < 2) {
-    await sendWhatsAppMessage(
+  const options = question.options || [];
+  
+  if (options.length <= 3) {
+    await sendWhatsAppButtons(
       conv.phone,
-      'أرسل اسمك ورقم جوالك\n\nمثال: محمد، 0501234567',
+      question.text,
+      options.map((opt: string, i: number) => ({ id: `opt_${i}`, title: opt })),
       accessToken,
       client.phone_number_id
     );
-    return;
+  } else {
+    await sendWhatsAppList(
+      conv.phone,
+      question.text,
+      'اختر',
+      options.map((opt: string, i: number) => ({ id: `opt_${i}`, title: opt })),
+      accessToken,
+      client.phone_number_id
+    );
   }
+  
+  conv.messages.push({ role: 'assistant', content: question.text });
+}
 
-  // Save lead data
-  conv.data.name = parts[0];
-  conv.data.phone = parts[1] || conv.phone;
-  conv.data.email = parts[2] || '';
-  conv.data.whatsappPhone = conv.phone;
-
-  // Score the lead
-  const score = scoreLead(conv.data);
-
-  // Create lead in database
+async function completeLead(client: any, conv: ConversationState, messages: ClientMessages, accessToken: string): Promise<void> {
   const leadId = await createLead({
     clientId: client.id,
     phone: conv.phone,
     name: conv.data.name,
-    email: conv.data.email,
+    email: '',
     data: conv.data,
-    score
+    score: 'new'
   });
 
-  conv.leadId = leadId || undefined;
-  conv.leadCaptured = true;
+  conv.data.leadId = leadId;
 
-  // Save to Google Sheets if configured
   if (client.settings?.googleSheetId) {
-    await saveLeadToSheet({
-      name: conv.data.name,
-      phone: conv.data.phone,
-      email: conv.data.email,
-      whatsappPhone: conv.phone,
-      propertyType: conv.data.interest,
-      city: conv.data.preference,
-      budget: conv.data.budget,
-      bedrooms: conv.data.extra1,
-      timestamp: new Date().toISOString()
-    });
+    try {
+      await saveLeadToSheet({ name: conv.data.name, phone: conv.phone, whatsappPhone: conv.phone, ...conv.data, timestamp: new Date().toISOString() });
+    } catch (error) {
+      console.error('❌ Sheets error:', error);
+    }
   }
 
-  // Notify agent(s)
   const agentNotification = formatMessage(messages.agentNotification, {
     name: conv.data.name,
-    phone: conv.data.phone,
+    phone: conv.phone,
     whatsapp: conv.phone,
-    interest: conv.data.interest || '-',
-    budget: conv.data.budget || '-',
     details: Object.entries(conv.data)
-      .filter(([k, v]) => !['name', 'phone', 'email', 'whatsappPhone', 'messageCount'].includes(k) && v)
+      .filter(([k]) => !['name', 'phone', 'whatsappPhone', 'nameAsked', 'leadId'].includes(k))
       .map(([k, v]) => `${k}: ${v}`)
       .join('\n') || '-',
     time: new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' })
   });
 
-  // Send to all agent phones
   for (const agentPhone of client.agent_phones || []) {
-    await sendWhatsAppMessage(agentPhone, agentNotification, accessToken, client.phone_number_id);
+    try {
+      await sendWhatsAppMessage(agentPhone, agentNotification, accessToken, client.phone_number_id);
+    } catch (error) {
+      console.error(`❌ Agent notify error:`, error);
+    }
   }
 
-  // Thank customer
   const thankYouMsg = formatMessage(messages.thankYou, { name: conv.data.name });
   await sendWhatsAppMessage(conv.phone, thankYouMsg, accessToken, client.phone_number_id);
   conv.messages.push({ role: 'assistant', content: thankYouMsg });
+  conv.state = 'completed';
 
-  // Move to chat state
-  conv.state = 'chat';
-
-  console.log(`✅ Lead captured: ${conv.data.name} (${conv.phone}) - Score: ${score}`);
-}
-
-async function handleChat(
-  client: any,
-  conv: ConversationState,
-  message: string,
-  messages: ClientMessages,
-  accessToken: string
-): Promise<void> {
-  // Generate AI response using knowledge base
-  const response = await generateKnowledgeResponse(
-    client.name,
-    client.knowledge_base || [],
-    conv.data,
-    conv.messages,
-    message
-  );
-
-  // Send response
-  await sendWhatsAppMessage(conv.phone, response.answer, accessToken, client.phone_number_id);
-  conv.messages.push({ role: 'assistant', content: response.answer });
-
-  // If AI suggests handover, trigger it
-  if (response.suggestHandover) {
-    await handleHandover(client, conv, messages, accessToken);
-  }
-}
-
-async function handleAppointment(
-  client: any,
-  conv: ConversationState,
-  message: string,
-  messages: ClientMessages,
-  accessToken: string
-): Promise<void> {
-  // Simple appointment handling
-  const inputNum = parseInt(message.trim());
-  
-  if (inputNum < 1 || inputNum > 4) {
-    await sendWhatsAppMessage(conv.phone, messages.invalidInput, accessToken, client.phone_number_id);
-    return;
-  }
-
-  if (inputNum === 4) {
-    // No appointment wanted
-    conv.state = 'chat';
-    await sendWhatsAppMessage(
-      conv.phone,
-      'تمام! لو تحتاج أي شيء، أنا هنا 👍',
-      accessToken,
-      client.phone_number_id
-    );
-    return;
-  }
-
-  // Calculate date
-  const today = new Date();
-  const appointmentDate = new Date(today);
-  appointmentDate.setDate(today.getDate() + (inputNum - 1));
-
-  const dateStr = appointmentDate.toLocaleDateString('ar-SA');
-
-  // Create appointment
-  if (conv.leadId) {
-    await createAppointment({
-      clientId: client.id,
-      leadId: conv.leadId,
-      phone: conv.phone,
-      date: appointmentDate.toISOString().split('T')[0],
-      time: '10:00',
-      type: conv.data.interest || 'general',
-      notes: `تم الحجز عبر الواتساب`
-    });
-  }
-
-  const confirmMsg = formatMessage(messages.appointmentConfirm, {
-    date: dateStr,
-    time: '10:00 صباحاً',
-    location: client.settings?.location || 'سيتم التأكيد',
-    doctor: ''
-  });
-
-  await sendWhatsAppMessage(conv.phone, confirmMsg, accessToken, client.phone_number_id);
-  conv.messages.push({ role: 'assistant', content: confirmMsg });
-  conv.data.appointmentRequested = true;
-
-  // Update lead score
-  conv.state = 'chat';
-  
-  // Notify agents about appointment
-  for (const agentPhone of client.agent_phones || []) {
-    await sendWhatsAppMessage(
-      agentPhone,
-      `📅 *موعد جديد!*\n\n👤 ${conv.data.name}\n📱 ${conv.phone}\n📅 ${dateStr}\n⏰ 10:00 صباحاً`,
-      accessToken,
-      client.phone_number_id
-    );
-  }
-
-  console.log(`📅 Appointment booked: ${conv.data.name} - ${dateStr}`);
-}
-
-async function handleHandover(
-  client: any,
-  conv: ConversationState,
-  messages: ClientMessages,
-  accessToken: string
-): Promise<void> {
-  conv.state = 'handover';
-  conv.handoverRequested = true;
-
-  // Notify customer
-  await sendWhatsAppMessage(conv.phone, messages.handoverRequested, accessToken, client.phone_number_id);
-  conv.messages.push({ role: 'assistant', content: messages.handoverRequested });
-
-  // Urgent notification to agents
-  const urgentMsg = `🚨 *طلب تحويل عاجل!*
-
-👤 ${conv.data.name || 'عميل'}
-�� ${conv.phone}
-
-📝 آخر رسالة: "${conv.messages[conv.messages.length - 2]?.content || '-'}"
-
-⚡ *تواصل معه الحين!*`;
-
-  for (const agentPhone of client.agent_phones || []) {
-    await sendWhatsAppMessage(agentPhone, urgentMsg, accessToken, client.phone_number_id);
-  }
-
-  console.log(`🚨 Handover requested: ${conv.phone}`);
+  console.log(`✅ Lead captured: ${conv.data.name} (${conv.phone})`);
 }
