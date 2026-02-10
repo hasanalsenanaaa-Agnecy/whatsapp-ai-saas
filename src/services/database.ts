@@ -16,25 +16,34 @@ export async function getClientByPhoneNumberId(phoneNumberId: string) {
   } catch (error) { console.error('❌ DB error:', error); return null; }
 }
 
+function parseJSON(value: any, fallback: any) {
+  if (!value) return fallback;
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+
 export async function getConversation(clientId: string, phone: string) {
   try {
     const rows = await sql`SELECT * FROM conversations WHERE client_id = ${clientId} AND phone = ${phone} LIMIT 1`;
     if (!rows[0]) return null;
     return {
-      clientId: rows[0].client_id, phone: rows[0].phone, messages: rows[0].messages || [],
-      state: rows[0].state, step: rows[0].step || 0, data: rows[0].data || {},
-      createdAt: rows[0].created_at, updatedAt: rows[0].updated_at
+      clientId: rows[0].client_id,
+      phone: rows[0].phone,
+      messages: parseJSON(rows[0].messages, []),
+      state: rows[0].state,
+      step: rows[0].step || 0,
+      data: parseJSON(rows[0].data, {}),
+      createdAt: rows[0].created_at,
+      updatedAt: rows[0].updated_at
     };
   } catch (error) { console.error('❌ DB error:', error); return null; }
 }
 
 export async function saveConversation(conv: any) {
   try {
-    // Check if exists
     const existing = await sql`SELECT id FROM conversations WHERE client_id = ${conv.clientId} AND phone = ${conv.phone} LIMIT 1`;
     
     if (existing.length > 0) {
-      // Update
       await sql`
         UPDATE conversations SET 
           messages = ${JSON.stringify(conv.messages)},
@@ -45,7 +54,6 @@ export async function saveConversation(conv: any) {
         WHERE client_id = ${conv.clientId} AND phone = ${conv.phone}
       `;
     } else {
-      // Insert
       await sql`
         INSERT INTO conversations (client_id, phone, messages, state, step, data, created_at, updated_at)
         VALUES (
@@ -66,11 +74,9 @@ export async function saveConversation(conv: any) {
 
 export async function createLead(lead: { clientId: string; phone: string; name: string; email: string; data: Record<string, any>; score: string }) {
   try {
-    // Check if exists
     const existing = await sql`SELECT id FROM leads WHERE client_id = ${lead.clientId} AND phone = ${lead.phone} LIMIT 1`;
     
     if (existing.length > 0) {
-      // Update
       await sql`
         UPDATE leads SET 
           name = ${lead.name},
@@ -80,7 +86,6 @@ export async function createLead(lead: { clientId: string; phone: string; name: 
       `;
       return existing[0].id;
     } else {
-      // Insert
       const rows = await sql`
         INSERT INTO leads (client_id, phone, name, email, data, score, created_at)
         VALUES (
