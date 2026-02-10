@@ -12,6 +12,18 @@ const fastify = Fastify({
   }
 });
 
+// Capture raw body for signature verification
+fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+  try {
+    const rawBody = body as string;
+    (req as any).rawBody = rawBody;
+    const json = JSON.parse(rawBody);
+    done(null, json);
+  } catch (err: any) {
+    done(err, undefined);
+  }
+});
+
 await initDatabase();
 await initGoogleSheets();
 
@@ -36,29 +48,18 @@ function extractMessageText(payload: any): string | null {
   return null;
 }
 
-function verifyWebhookSignature(body: string, signature: string, secret: string): boolean {
-  if (!signature || !secret) {
-    console.log('⚠️ Missing signature or secret');
-    return false;
-  }
+function verifyWebhookSignature(rawBody: string, signature: string, secret: string): boolean {
+  if (!signature || !secret) return false;
   
   try {
     const expectedSignature = 'sha256=' + crypto
       .createHmac('sha256', secret)
-      .update(body)
+      .update(rawBody)
       .digest('hex');
     
-    // Compare using constant-time comparison
-    if (signature.length !== expectedSignature.length) {
-      return false;
-    }
-    
-    return crypto.timingSafeEqual(
-      Buffer.from(signature, 'utf8'),
-      Buffer.from(expectedSignature, 'utf8')
-    );
+    return signature === expectedSignature;
   } catch (error) {
-    console.error('❌ Signature verification error:', error);
+    console.error('❌ Signature error:', error);
     return false;
   }
 }
@@ -78,6 +79,7 @@ fastify.get('/webhook/whatsapp', async (request, reply) => {
 
 fastify.post('/webhook/whatsapp', async (request, reply) => {
   const signature = request.headers['x-hub-signature-256'] as string;
+  const rawBody = (request as any).rawBody as string;
   const phoneNumberId = extractPhoneNumberId(request.body);
   
   reply.code(200).send({ ok: true });
@@ -96,11 +98,9 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
         return;
       }
       
-      // Use WHATSAPP_APP_SECRET env var, fallback to client.verify_token
       const appSecret = process.env.WHATSAPP_APP_SECRET || client.verify_token;
-      const body = JSON.stringify(request.body);
       
-      if (!verifyWebhookSignature(body, signature, appSecret)) {
+      if (!verifyWebhookSignature(rawBody, signature, appSecret)) {
         console.error('❌ Invalid signature');
         return;
       }
