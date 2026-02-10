@@ -30,23 +30,71 @@ export async function getConversation(clientId: string, phone: string) {
 
 export async function saveConversation(conv: any) {
   try {
-    await sql`
-      INSERT INTO conversations (client_id, phone, messages, state, step, data, created_at, updated_at)
-      VALUES (${conv.clientId}, ${conv.phone}, ${JSON.stringify(conv.messages)}, ${conv.state}, ${conv.step}, ${JSON.stringify(conv.data)}, ${conv.createdAt || new Date().toISOString()}, ${new Date().toISOString()})
-      ON CONFLICT (client_id, phone) DO UPDATE SET messages = ${JSON.stringify(conv.messages)}, state = ${conv.state}, step = ${conv.step}, data = ${JSON.stringify(conv.data)}, updated_at = ${new Date().toISOString()}
-    `;
+    // Check if exists
+    const existing = await sql`SELECT id FROM conversations WHERE client_id = ${conv.clientId} AND phone = ${conv.phone} LIMIT 1`;
+    
+    if (existing.length > 0) {
+      // Update
+      await sql`
+        UPDATE conversations SET 
+          messages = ${JSON.stringify(conv.messages)},
+          state = ${conv.state},
+          step = ${conv.step},
+          data = ${JSON.stringify(conv.data)},
+          updated_at = ${new Date().toISOString()}
+        WHERE client_id = ${conv.clientId} AND phone = ${conv.phone}
+      `;
+    } else {
+      // Insert
+      await sql`
+        INSERT INTO conversations (client_id, phone, messages, state, step, data, created_at, updated_at)
+        VALUES (
+          ${conv.clientId}, 
+          ${conv.phone}, 
+          ${JSON.stringify(conv.messages)}, 
+          ${conv.state}, 
+          ${conv.step}, 
+          ${JSON.stringify(conv.data)}, 
+          ${conv.createdAt || new Date().toISOString()}, 
+          ${new Date().toISOString()}
+        )
+      `;
+    }
     return true;
   } catch (error) { console.error('❌ DB error:', error); return false; }
 }
 
 export async function createLead(lead: { clientId: string; phone: string; name: string; email: string; data: Record<string, any>; score: string }) {
   try {
-    const rows = await sql`
-      INSERT INTO leads (client_id, phone, name, email, data, score, created_at)
-      VALUES (${lead.clientId}, ${lead.phone}, ${lead.name}, ${lead.email || ''}, ${JSON.stringify(lead.data)}, ${lead.score || 'new'}, ${new Date().toISOString()})
-      ON CONFLICT (client_id, phone) DO UPDATE SET name = ${lead.name}, data = ${JSON.stringify(lead.data)}, updated_at = ${new Date().toISOString()}
-      RETURNING id
-    `;
-    return rows[0]?.id;
+    // Check if exists
+    const existing = await sql`SELECT id FROM leads WHERE client_id = ${lead.clientId} AND phone = ${lead.phone} LIMIT 1`;
+    
+    if (existing.length > 0) {
+      // Update
+      await sql`
+        UPDATE leads SET 
+          name = ${lead.name},
+          data = ${JSON.stringify(lead.data)},
+          updated_at = ${new Date().toISOString()}
+        WHERE client_id = ${lead.clientId} AND phone = ${lead.phone}
+      `;
+      return existing[0].id;
+    } else {
+      // Insert
+      const rows = await sql`
+        INSERT INTO leads (client_id, phone, name, email, data, score, created_at)
+        VALUES (
+          ${lead.clientId}, 
+          ${lead.phone}, 
+          ${lead.name}, 
+          ${lead.email || ''}, 
+          ${JSON.stringify(lead.data)}, 
+          ${lead.score || 'new'}, 
+          ${new Date().toISOString()}
+        )
+        RETURNING id
+      `;
+      return rows[0]?.id;
+    }
   } catch (error) { console.error('❌ DB error:', error); return null; }
 }

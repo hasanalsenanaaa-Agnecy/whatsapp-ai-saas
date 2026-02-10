@@ -28,9 +28,15 @@ export async function handleIncomingMessage(
     return;
   }
 
-  const clientMessages: ClientMessages = client.messages && Object.keys(client.messages).length > 0
-    ? client.messages
-    : getDefaultMessages(client.industry);
+  // Merge database messages with defaults (defaults fill in missing fields)
+  const defaults = getDefaultMessages(client.industry);
+  const clientMessages: ClientMessages = {
+    ...defaults,
+    ...(client.messages || {}),
+    // Ensure arrays exist
+    welcomeButtons: client.messages?.welcomeButtons || defaults.welcomeButtons,
+    questions: client.questions?.length > 0 ? client.questions : defaults.questions
+  };
 
   let conv = await getConversation(client.id, customerPhone);
   const now = new Date().toISOString();
@@ -102,6 +108,14 @@ function handleBackCommand(message: string, conv: ConversationState): { handled:
   return { handled: false, newState: conv.state, newStep: conv.step };
 }
 
+function normalizeArabicNumbers(text: string): string {
+  const arabicToEnglish: Record<string, string> = {
+    '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+    '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'
+  };
+  return text.split('').map(c => arabicToEnglish[c] || c).join('');
+}
+
 async function handleWelcome(client: any, conv: ConversationState, messages: ClientMessages, accessToken: string): Promise<void> {
   const welcomeMsg = formatMessage(messages.welcome, { businessName: client.name });
 
@@ -125,7 +139,10 @@ async function handleAskName(client: any, conv: ConversationState, message: stri
   }
   
   const name = message.trim();
-  if (name.length < 2 || /^\d+$/.test(name)) {
+  const normalized = normalizeArabicNumbers(name);
+  
+  // Reject if too short or only numbers
+  if (name.length < 2 || /^\d+$/.test(normalized)) {
     await sendWhatsAppMessage(conv.phone, 'أرسل لي اسمك الكريم 😊', accessToken, client.phone_number_id);
     return;
   }
@@ -139,7 +156,7 @@ async function handleAskName(client: any, conv: ConversationState, message: stri
 }
 
 async function handleQuestions(client: any, conv: ConversationState, message: string, messages: ClientMessages, accessToken: string): Promise<void> {
-  const questions = client.questions?.length > 0 ? client.questions : messages.questions;
+  const questions = messages.questions || [];
   const currentQuestion = questions[conv.step];
   
   if (!currentQuestion) {
@@ -150,11 +167,14 @@ async function handleQuestions(client: any, conv: ConversationState, message: st
   const options = currentQuestion.options || [];
   let selectedOption: string | null = null;
   const lowerMessage = message.toLowerCase().trim();
+  const normalizedMessage = normalizeArabicNumbers(message.trim());
   
+  // Try exact match
   selectedOption = options.find((opt: string) => opt.toLowerCase() === lowerMessage || opt === message.trim());
   
+  // Try number match (including Arabic numerals)
   if (!selectedOption) {
-    const num = parseInt(message.trim());
+    const num = parseInt(normalizedMessage);
     if (num >= 1 && num <= options.length) selectedOption = options[num - 1];
   }
   
@@ -177,7 +197,7 @@ async function handleQuestions(client: any, conv: ConversationState, message: st
 }
 
 async function sendQuestion(client: any, conv: ConversationState, messages: ClientMessages, accessToken: string): Promise<void> {
-  const questions = client.questions?.length > 0 ? client.questions : messages.questions;
+  const questions = messages.questions || [];
   const question = questions[conv.step];
   if (!question) return;
   
