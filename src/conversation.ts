@@ -34,7 +34,7 @@ export async function handleIncomingMessage(
     ...defaults,
     ...(client.messages || {}),
     // Ensure arrays exist
-    welcomeButtons: client.messages?.welcomeButtons || defaults.welcomeButtons,
+    welcomeButtons: defaults.welcomeButtons,
     questions: client.questions?.length > 0 ? client.questions : defaults.questions
   };
 
