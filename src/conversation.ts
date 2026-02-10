@@ -28,13 +28,10 @@ export async function handleIncomingMessage(
     return;
   }
 
-  // Merge database messages with defaults (defaults fill in missing fields)
+  // Always use code defaults, only override questions from database
   const defaults = getDefaultMessages(client.industry);
   const clientMessages: ClientMessages = {
     ...defaults,
-    ...(client.messages || {}),
-    // Ensure arrays exist
-    welcomeButtons: defaults.welcomeButtons,
     questions: client.questions?.length > 0 ? client.questions : defaults.questions
   };
 
@@ -143,7 +140,7 @@ async function handleAskName(client: any, conv: ConversationState, message: stri
   
   // Reject if too short or only numbers
   if (name.length < 2 || /^\d+$/.test(normalized)) {
-    await sendWhatsAppMessage(conv.phone, 'أرسل لي اسمك الكريم 😊', accessToken, client.phone_number_id);
+    await sendWhatsAppMessage(conv.phone, 'أرسل لي اسمك الكريم', accessToken, client.phone_number_id);
     return;
   }
   
@@ -165,12 +162,11 @@ async function handleQuestions(client: any, conv: ConversationState, message: st
   }
 
   const options = currentQuestion.options || [];
-  let selectedOption: string | null = null;
   const lowerMessage = message.toLowerCase().trim();
   const normalizedMessage = normalizeArabicNumbers(message.trim());
   
   // Try exact match
-  selectedOption = options.find((opt: string) => opt.toLowerCase() === lowerMessage || opt === message.trim());
+  let selectedOption = options.find((opt: string) => opt.toLowerCase() === lowerMessage || opt === message.trim());
   
   // Try number match (including Arabic numerals)
   if (!selectedOption) {
