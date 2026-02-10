@@ -235,7 +235,7 @@ async function completeLead(client: any, conv: ConversationState, messages: Clie
 
   if (client.settings?.googleSheetId) {
     try {
-      await saveLeadToSheet({ name: conv.data.name, phone: conv.phone, whatsappPhone: conv.phone, ...conv.data, timestamp: new Date().toISOString() });
+      await saveLeadToSheet(client, conv.data);
     } catch (error) {
       console.error('❌ Sheets error:', error);
     }
