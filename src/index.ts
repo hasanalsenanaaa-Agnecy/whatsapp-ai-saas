@@ -4,6 +4,7 @@ import { initDatabase, getClientByPhoneNumberId } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
 import crypto from 'crypto';
+import { sendAlert, alertError } from './services/alerts.js';
 
 const fastify = Fastify({
   logger: {
@@ -44,7 +45,7 @@ function extractMessageText(payload: any): string | null {
     if (message.interactive?.list_reply) return message.interactive.list_reply.title;
   }
   if (message.type === 'text') return message.text?.body || null;
-  if (message.type === 'audio') return '[صوت]';
+  if (message.type === 'audio') return '[voice]';
   return null;
 }
 
@@ -59,7 +60,7 @@ function verifyWebhookSignature(rawBody: string, signature: string, secret: stri
     
     return signature === expectedSignature;
   } catch (error) {
-    console.error('❌ Signature error:', error);
+    console.error('Signature error:', error);
     return false;
   }
 }
@@ -71,7 +72,7 @@ fastify.get('/webhook/whatsapp', async (request, reply) => {
   const query = request.query as any;
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
   if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === verifyToken) {
-    console.log('✅ Webhook verified');
+    console.log('Webhook verified');
     return reply.send(query['hub.challenge']);
   }
   return reply.code(403).send('Forbidden');
@@ -94,21 +95,22 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
       
       const client = await getClientByPhoneNumberId(phoneNumberId);
       if (!client) {
-        console.error(`❌ No client found for: ${phoneNumberId}`);
+        console.error('No client found for: ' + phoneNumberId);
         return;
       }
       
       const appSecret = process.env.WHATSAPP_APP_SECRET || client.verify_token;
       
       if (!verifyWebhookSignature(rawBody, signature, appSecret)) {
-        console.error('❌ Invalid signature');
+        console.error('Invalid signature');
         return;
       }
       
-      console.log(`📩 Message from ${customerPhone}: ${messageText}`);
+      console.log('Message from ' + customerPhone + ': ' + messageText);
       await handleIncomingMessage(phoneNumberId, customerPhone, messageText, client.access_token);
     } catch (error) {
-      console.error('❌ Error:', error);
+      console.error('Error:', error);
+      await alertError(error as Error, 'Webhook processing failed');
     }
   });
 });
@@ -116,7 +118,8 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
 const start = async () => {
   const port = parseInt(process.env.PORT || '3000', 10);
   await fastify.listen({ port, host: '0.0.0.0' });
-  console.log(`🚀 WhatsApp AI Receptionist running on port ${port}`);
+  console.log('WhatsApp AI Receptionist running on port ' + port);
+  await sendAlert('info', 'Server started', 'WhatsApp AI Bot running on port ' + port);
 };
-
 start();
+
