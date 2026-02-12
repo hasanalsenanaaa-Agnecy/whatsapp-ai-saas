@@ -7,8 +7,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsup src/index.ts --format esm --out-dir dist --clean --sourcemap",
-    
     "start": "tsx src/index.ts",
+    "client": "tsx src/scripts/client-cli.ts",
     "postinstall": "npm run build",
     "db:backup": "tsx src/tools/db-maintenance.ts backup",
     "db:restore": "tsx src/tools/db-maintenance.ts restore",
