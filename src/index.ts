@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import { initDatabase, getClientByPhoneNumberId } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
+import { handleReminderCron } from './cron/reminders.js';
 import crypto from 'crypto';
 import { sendAlert, alertError } from './services/alerts.js';
 
@@ -65,9 +66,11 @@ function verifyWebhookSignature(rawBody: string, signature: string, secret: stri
   }
 }
 
-fastify.get('/', async () => ({ service: 'WhatsApp AI Receptionist', status: 'running', version: '1.0.0' }));
+// Health check routes
+fastify.get('/', async () => ({ service: 'WhatsApp AI Receptionist', status: 'running', version: '2.0.0' }));
 fastify.get('/health', async () => ({ status: 'healthy', uptime: process.uptime() }));
 
+// WhatsApp webhook verification
 fastify.get('/webhook/whatsapp', async (request, reply) => {
   const query = request.query as any;
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
@@ -78,6 +81,7 @@ fastify.get('/webhook/whatsapp', async (request, reply) => {
   return reply.code(403).send('Forbidden');
 });
 
+// WhatsApp webhook handler
 fastify.post('/webhook/whatsapp', async (request, reply) => {
   const signature = request.headers['x-hub-signature-256'] as string;
   const rawBody = (request as any).rawBody as string;
@@ -101,7 +105,7 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
       
       const appSecret = process.env.WHATSAPP_APP_SECRET || client.verify_token;
       
-      if (!verifyWebhookSignature(rawBody, signature, appSecret)) {
+      if (appSecret && !verifyWebhookSignature(rawBody, signature, appSecret)) {
         console.error('Invalid signature');
         return;
       }
@@ -115,6 +119,11 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
   });
 });
 
+// Cron endpoint for appointment reminders
+fastify.post('/cron/reminders', async (request, reply) => {
+  await handleReminderCron(request, reply);
+});
+
 const start = async () => {
   const port = parseInt(process.env.PORT || '3000', 10);
   await fastify.listen({ port, host: '0.0.0.0' });
@@ -122,4 +131,3 @@ const start = async () => {
   await sendAlert('info', 'Server started', 'WhatsApp AI Bot running on port ' + port);
 };
 start();
-
