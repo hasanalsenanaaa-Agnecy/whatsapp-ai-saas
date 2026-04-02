@@ -10,3 +10,4 @@ build/
 *.log
 *.tmp
 coverage/
+.DS_Store
