@@ -60,9 +60,9 @@ async function addClient() {
   const nameEn = await prompt('Business name (English, for ID): ');
   
   // Industry
-  console.log('\nIndustries: real_estate, clinic, car_dealership, generic');
+  console.log('\nIndustries: real_estate, clinic, car_dealership, driving_school, home_services, generic');
   const industry = await prompt('Industry: ');
-  if (!['real_estate', 'clinic', 'car_dealership', 'generic'].includes(industry)) {
+  if (!['real_estate', 'clinic', 'car_dealership', 'driving_school', 'home_services', 'generic'].includes(industry)) {
     console.log('❌ Invalid industry'); return;
   }
 
@@ -134,7 +134,7 @@ async function addClient() {
   const confirm = await prompt('\n✅ Save client? (yes/no): ');
   if (confirm !== 'yes') { console.log('Cancelled.'); return; }
 
-  // Insert
+      // Insert
   try {
     await sql`
       INSERT INTO clients (
@@ -142,7 +142,7 @@ async function addClient() {
         verify_token, agent_phones, questions, settings, messages, active, created_at
       ) VALUES (
         ${clientId}, ${name}, ${industry}, ${phoneNumberId}, ${accessToken},
-        ${verifyToken}, ${agentPhones}, ${JSON.stringify(questions)}, ${JSON.stringify(settings)},
+        ${verifyToken}, ${[agentPhones]}, ${JSON.stringify(questions)}, ${JSON.stringify(settings)},
         ${JSON.stringify({})}, true, NOW()
       )
     `;
@@ -290,7 +290,7 @@ async function editClient(clientId: string) {
   const accessToken = await prompt(`Access Token [****]: `);
 
   if (agentPhones) {
-    await sql`UPDATE clients SET agent_phones = ${agentPhones} WHERE id = ${clientId}`;
+    await sql`UPDATE clients SET agent_phones = ${[agentPhones]} WHERE id = ${clientId}`;
   }
   if (accessToken) {
     await sql`UPDATE clients SET access_token = ${accessToken} WHERE id = ${clientId}`;
@@ -306,24 +306,40 @@ async function editClient(clientId: string) {
 function getDefaultQuestions(industry: string): any[] {
   const defaults: Record<string, any[]> = {
     real_estate: [
-      { id: 'q1', text: 'وش نوع العقار اللي تبحث عنه؟', options: ['فيلا', 'شقة', 'أرض'] },
-      { id: 'q2', text: 'وين المنطقة المفضلة؟', options: ['الدمام', 'الخبر', 'الظهران'] },
-      { id: 'q3', text: 'وش ميزانيتك التقريبية؟', options: ['أقل من 500 ألف', '500 ألف - مليون', 'أكثر من مليون'] }
+      { id: 'q1', text: 'كيف نقدر نساعدك؟', options: ['أبي أشتري', 'أبي أبيع', 'أبي أستأجر', 'استفسار عام'] },
+      { id: 'q2', text: 'وش نوع العقار؟', options: ['شقة', 'فيلا', 'أرض', 'دوبلكس'] },
+      { id: 'q3', text: 'وش الميزانية؟', options: ['أقل من 500 ألف', '500 ألف - مليون', 'مليون - 2 مليون', 'أكثر من 2 مليون'] },
+      { id: 'q4', text: 'وين المنطقة؟', options: ['الدمام', 'الخبر', 'الظهران', 'القطيف', 'الجبيل', 'الأحساء', 'منطقة ثانية'] },
+      { id: 'q5', text: 'وش الوقت المفضل؟', options: ['الحين', 'خلال شهر', 'أتصفح بس'] }
     ],
     clinic: [
-      { id: 'q1', text: 'وش نوع الخدمة؟', options: ['حجز موعد', 'استشارة', 'متابعة'] },
-      { id: 'q2', text: 'أي قسم تحتاج؟', options: ['أسنان', 'جلدية', 'عيون'] },
-      { id: 'q3', text: 'وش الوقت المناسب؟', options: ['صباحاً', 'مساءً', 'أي وقت'] }
+      { id: 'q1', text: 'أي خدمة تحتاج؟', options: ['أسنان', 'جلدية', 'عيون', 'عظام', 'أطفال', 'طب عام', 'تجميل', 'خدمة ثانية'] },
+      { id: 'q2', text: 'وش نوع الزيارة؟', options: ['كشف جديد', 'متابعة', 'نتائج تحاليل', 'استفسار عن الأسعار'] },
+      { id: 'q3', text: 'هل عندك تأمين؟', options: ['عندي تأمين', 'بدون تأمين / نقدي', 'أبي أعرف التأمينات المقبولة'] },
+      { id: 'q4', text: 'وش الوقت المفضل؟', options: ['صباحي (8-12)', 'بعد الظهر (12-4)', 'مسائي (4-9)', 'أقرب موعد متاح'] }
     ],
     car_dealership: [
-      { id: 'q1', text: 'وش نوع السيارة؟', options: ['جديدة', 'مستعملة', 'تأجير'] },
-      { id: 'q2', text: 'أي ماركة تفضل؟', options: ['تويوتا', 'هونداي', 'فورد'] },
-      { id: 'q3', text: 'وش ميزانيتك؟', options: ['أقل من 50 ألف', '50-100 ألف', 'أكثر من 100 ألف'] }
+      { id: 'q1', text: 'وش الخدمة المطلوبة؟', options: ['شراء', 'بيع', 'تقييم'] },
+      { id: 'q2', text: 'جديدة ولا مستعملة؟', options: ['جديدة', 'مستعملة'] },
+      { id: 'q3', text: 'وش الميزانية؟', options: ['أقل من 50 ألف', '50-100 ألف', 'أكثر من 100 ألف'] },
+      { id: 'q4', text: 'أي نوع تفضل؟', options: ['سيدان', 'جيب', 'بيك أب', 'موتور'] }
+    ],
+    driving_school: [
+      { id: 'q1', text: 'وش نوع الرخصة؟', options: ['رخصة جديدة', 'تجديد', 'دولية'] },
+      { id: 'q2', text: 'خاص ولا عام؟', options: ['خاص', 'عام'] },
+      { id: 'q3', text: 'وش الوقت المفضل؟', options: ['صباحي', 'مسائي', 'عطلة نهاية الأسبوع'] },
+      { id: 'q4', text: 'أي فرع؟', options: ['الدمام', 'الخبر', 'الظهران', 'القطيف'] }
+    ],
+    home_services: [
+      { id: 'q1', text: 'أي خدمة تحتاج؟', options: ['تنظيف', 'صيانة', 'تركيب'] },
+      { id: 'q2', text: 'متى تحتاج الخدمة؟', options: ['الحين', 'خلال يومين', 'هذا الأسبوع'] },
+      { id: 'q3', text: 'وين المنطقة؟', options: ['الدمام', 'الخبر', 'الظهران', 'القطيف'] },
+      { id: 'q4', text: 'تفاصيل إضافية؟', options: ['أحتاج تفاصيل', 'أتصفح بس', 'أبي عرض سعر'] }
     ],
     generic: [
-      { id: 'q1', text: 'كيف نقدر نساعدك؟', options: ['استفسار', 'طلب خدمة', 'شكوى'] },
-      { id: 'q2', text: 'هل تواصلت معنا قبل؟', options: ['نعم', 'لا'] },
-      { id: 'q3', text: 'وش الوقت المناسب للتواصل؟', options: ['صباحاً', 'مساءً', 'أي وقت'] }
+      { id: 'q1', text: 'كيف نقدر نساعدك؟', options: ['أبي أعرف عن الخدمات', 'أبي أعرف الأسعار', 'أبي أحجز موعد', 'أبي أتكلم مع شخص'] },
+      { id: 'q2', text: 'كيف سمعت عنا؟', options: ['سناب شات / انستقرام', 'توصية من صديق', 'بحث قوقل', 'إعلان'] },
+      { id: 'q3', text: 'وش الاستعجال؟', options: ['أحتاجها الحين', 'خلال هالأسبوع', 'أتصفح بس'] }
     ]
   };
   return defaults[industry] || defaults.generic;
