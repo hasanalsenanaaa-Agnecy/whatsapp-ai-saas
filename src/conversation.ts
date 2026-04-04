@@ -29,7 +29,7 @@ interface ConversationState {
   clientId: string;
   phone: string;
   messages: { role: string; content: string }[];
-  state: 'welcome' | 'questions' | 'appointment_date' | 'appointment_time' | 'completed';
+  state: 'welcome' | 'questions' | 'appointment_date' | 'appointment_time' | 'completed' | 'chat';
   step: number;
   data: Record<string, any>;
   createdAt: string;
@@ -44,6 +44,71 @@ interface ClientFeatures {
 }
 
 const CONVERSATION_TIMEOUT_HOURS = 24;
+
+// ============================================================
+// POST-COMPLETION INTENT DETECTION
+// ============================================================
+
+interface DetectedIntent {
+  type: 'cancel' | 'reschedule' | 'status_update' | 'complaint' | 'talk_to_agent' | 'general';
+  confidence: 'high' | 'medium';
+  forwardToAgent: boolean;
+}
+
+function detectPostCompletionIntent(message: string): DetectedIntent {
+  const lower = message.toLowerCase().trim();
+
+  // Cancel intent
+  const cancelKeywords = ['cancel', 'الغاء', 'ألغي', 'الغي', 'لا ابي', 'ما ابي', 'لا أبي', 'ما أبي', 'كنسل', 'الغ'];
+  if (cancelKeywords.some(k => lower.includes(k))) {
+    return { type: 'cancel', confidence: 'high', forwardToAgent: true };
+  }
+
+  // Reschedule intent
+  const rescheduleKeywords = ['reschedule', 'تغيير موعد', 'غير الموعد', 'تأجيل', 'أجل', 'اجل', 'تعديل موعد', 'بدل الموعد'];
+  if (rescheduleKeywords.some(k => lower.includes(k))) {
+    return { type: 'reschedule', confidence: 'high', forwardToAgent: true };
+  }
+
+  // Status update / tracking intent
+  const statusKeywords = ['update', 'status', 'وين طلبي', 'وين الطلب', 'تحديث', 'وش صار', 'متى يوصل', 'tracking', 'track', 'وصل'];
+  if (statusKeywords.some(k => lower.includes(k))) {
+    return { type: 'status_update', confidence: 'high', forwardToAgent: true };
+  }
+
+  // Complaint intent
+  const complaintKeywords = ['شكوى', 'complaint', 'مشكلة', 'problem', 'issue', 'زعلان', 'مو راضي', 'سيء', 'خرب'];
+  if (complaintKeywords.some(k => lower.includes(k))) {
+    return { type: 'complaint', confidence: 'high', forwardToAgent: true };
+  }
+
+  // Talk to human / agent
+  const agentKeywords = ['agent', 'human', 'person', 'موظف', 'شخص', 'بشر', 'أكلم أحد', 'اكلم احد', 'ممثل', 'خدمة عملاء'];
+  if (agentKeywords.some(k => lower.includes(k))) {
+    return { type: 'talk_to_agent', confidence: 'high', forwardToAgent: true };
+  }
+
+  // General follow-up (greetings, questions, etc.)
+  return { type: 'general', confidence: 'medium', forwardToAgent: false };
+}
+
+// Intent-specific response messages (Gulf Arabic)
+const INTENT_RESPONSES: Record<string, string> = {
+  cancel: 'تم استلام طلب الإلغاء ✅\nفريقنا بيتواصل معك قريب لتأكيد الإلغاء.',
+  reschedule: 'تم استلام طلب تغيير الموعد ✅\nفريقنا بيتواصل معك قريب لتحديد موعد جديد.',
+  status_update: 'شكراً على تواصلك! 👍\nفريقنا بيرد عليك بتحديث قريب.',
+  complaint: 'نعتذر عن أي إزعاج 🙏\nفريقنا بيتواصل معك بأسرع وقت لحل الموضوع.',
+  talk_to_agent: 'تمام! 👍\nبنحولك لأحد فريقنا يتواصل معك خلال دقائق.',
+};
+
+// Agent notification templates for each intent
+const INTENT_AGENT_NOTIFICATIONS: Record<string, string> = {
+  cancel: '🚨 *طلب إلغاء*\n\n👤 {name}\n📱 {phone}\n💬 wa.me/{whatsapp}\n\n📝 الرسالة: {message}\n⏰ {time}',
+  reschedule: '📅 *طلب تغيير موعد*\n\n👤 {name}\n📱 {phone}\n💬 wa.me/{whatsapp}\n\n📝 الرسالة: {message}\n⏰ {time}',
+  status_update: '📦 *استفسار عن حالة*\n\n👤 {name}\n📱 {phone}\n💬 wa.me/{whatsapp}\n\n📝 الرسالة: {message}\n⏰ {time}',
+  complaint: '⚠️ *شكوى عميل*\n\n👤 {name}\n📱 {phone}\n💬 wa.me/{whatsapp}\n\n📝 الرسالة: {message}\n⏰ {time}',
+  talk_to_agent: '📞 *طلب تحويل لموظف*\n\n👤 {name}\n📱 {phone}\n💬 wa.me/{whatsapp}\n\n📝 الرسالة: {message}\n⏰ {time}',
+};
 
 // ============================================================
 // MAIN HANDLER
@@ -105,15 +170,17 @@ export async function handleIncomingMessage(
   conv.updatedAt = now;
   conv.messages.push({ role: 'user', content: message });
 
-  // Check for back command
-  const backResult = handleBackCommand(message, conv);
-  if (backResult.handled) {
-    conv.state = backResult.newState as any;
-    conv.step = backResult.newStep;
+  // Check for back command (only during active flow, not after completion)
+  if (conv.state !== 'completed' && conv.state !== 'chat') {
+    const backResult = handleBackCommand(message, conv);
+    if (backResult.handled) {
+      conv.state = backResult.newState as any;
+      conv.step = backResult.newStep;
+    }
   }
 
   // ============================================================
-  // HANDOVER DETECTION (if enabled)
+  // HANDOVER DETECTION (if enabled, works in any state)
   // ============================================================
   if (features.handover_detection && detectHandoverIntent(message)) {
     await handleHandoverRequest(client, conv, message, clientMessages, accessToken);
@@ -138,10 +205,12 @@ export async function handleIncomingMessage(
       await handleAppointmentTime(client, conv, message, clientMessages, appointmentSettings, accessToken);
       break;
     case 'completed':
-      // If AI fallback enabled, respond to questions after completion
-      if (features.ai_fallback && looksLikeQuestion(message)) {
-        await handleAIFallback(client, conv, message, accessToken);
-      }
+      // Transition to chat state for any follow-up
+      conv.state = 'chat';
+      await handleChat(client, conv, message, clientMessages, features, accessToken);
+      break;
+    case 'chat':
+      await handleChat(client, conv, message, clientMessages, features, accessToken);
       break;
   }
 
@@ -336,6 +405,74 @@ async function handleAppointmentTime(
   
   // Complete lead with appointment
   await completeLead(client, conv, messages, features, appointmentSettings, accessToken);
+}
+
+/**
+ * Chat state: Handle post-completion follow-ups
+ * Detects intent (cancel, reschedule, status, complaint, general)
+ * Uses AI if available, otherwise sends appropriate response + notifies agent
+ */
+async function handleChat(
+  client: any,
+  conv: ConversationState,
+  message: string,
+  messages: ClientMessages,
+  features: ClientFeatures,
+  accessToken: string
+): Promise<void> {
+  // Detect what the customer wants
+  const intent = detectPostCompletionIntent(message);
+
+  console.log(`💬 Chat intent: ${intent.type} (${intent.confidence}) from ${conv.data.name || conv.phone}`);
+
+  // HIGH-PRIORITY INTENTS: Always forward to agent + send specific response
+  if (intent.forwardToAgent) {
+    // Send intent-specific response to customer
+    const response = INTENT_RESPONSES[intent.type];
+    await sendWhatsAppMessage(conv.phone, response, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: response });
+
+    // Notify agent with context
+    const notificationTemplate = INTENT_AGENT_NOTIFICATIONS[intent.type];
+    if (notificationTemplate) {
+      const notification = formatMessage(notificationTemplate, {
+        name: conv.data.name || 'غير معروف',
+        phone: conv.phone,
+        whatsapp: conv.phone.replace('+', ''),
+        message: message,
+        time: new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' })
+      });
+
+      for (const agentPhone of client.agent_phones || []) {
+        try {
+          await sendWhatsAppMessage(agentPhone, notification, accessToken, client.phone_number_id);
+        } catch (error) {
+          console.error(`❌ Agent notify error:`, error);
+        }
+      }
+    }
+
+    // Track the intent
+    if (!conv.data.postCompletionIntents) conv.data.postCompletionIntents = [];
+    conv.data.postCompletionIntents.push({
+      type: intent.type,
+      message: message,
+      time: new Date().toISOString()
+    });
+
+    return;
+  }
+
+  // GENERAL MESSAGES: Use AI if available, otherwise friendly acknowledgment
+  if (features.ai_fallback && isAIAvailable()) {
+    await handleAIFallback(client, conv, message, accessToken);
+  } else {
+    // Simple friendly response - acknowledge and let them know agent will follow up
+    const name = conv.data.name || '';
+    const fallbackMsg = `أهلاً ${name}! 👋\nمعلوماتك وصلتنا وفريقنا بيتواصل معك قريب.\nإذا تبي تتكلم مع أحد فريقنا، رد بـ "موظف" وبنحولك.`;
+    await sendWhatsAppMessage(conv.phone, fallbackMsg, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: fallbackMsg });
+  }
 }
 
 // ============================================================
@@ -594,7 +731,7 @@ async function completeLead(
     .filter(([k]) => !['name', 'phone', 'whatsappPhone', 'welcomeSent', 'leadId', 'appointmentId', 
                        'appointmentDate', 'appointmentDateLabel', 'appointmentTimeSlot', 
                        'appointmentTimeLabel', 'appointmentReminderAt', 'aiUsed', 'askedAboutPrice',
-                       'handoverRequested', 'messageCount'].includes(k))
+                       'handoverRequested', 'messageCount', 'postCompletionIntents'].includes(k))
     .map(([k, v]) => `${k}: ${v}`)
     .join('\n') || '-';
 
