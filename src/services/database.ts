@@ -45,7 +45,8 @@ export function getDefaultFeatures() {
     ai_fallback: false,
     lead_scoring: false,
     handover_detection: false,
-    appointment_setting: false
+    appointment_setting: false,
+    ai_conversation: false
   };
 }
 
