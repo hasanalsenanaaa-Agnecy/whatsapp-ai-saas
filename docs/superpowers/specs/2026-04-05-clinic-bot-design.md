@@ -29,8 +29,8 @@ Patient messages clinic WhatsApp number
 |---|---|
 | Bot repo | `~/Documents/whatsapp-bot` (fork: `github.com/alsenana89/whatsapp-bot`) |
 | Active branch | `dev` |
-| Perfect Smile API base | `https://megaproduction.co/book/api` |
-| Bookings dashboard | `https://megaproduction.co/book/dashboard/bookings.html` |
+| Perfect Smile API base | `https://<YOUR_DOMAIN>/book/api` |
+| Bookings dashboard | `https://<YOUR_DOMAIN>/book/dashboard/bookings.html` |
 
 ---
 
@@ -149,7 +149,7 @@ One row in the bot's `clients` table for Perfect Smile. No schema changes needed
   },
   "settings": {
     "booking_api": {
-      "url": "https://megaproduction.co/book/api",
+      "url": "https://<YOUR_DOMAIN>/book/api",
       "clinic_id": "<PERFECT_SMILE_CLINIC_ID>"
     }
   },
