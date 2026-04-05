@@ -60,9 +60,9 @@ async function addClient() {
   const nameEn = await prompt('Business name (English, for ID): ');
   
   // Industry
-  console.log('\nIndustries: real_estate, clinic, car_dealership, driving_school, home_services, generic');
+  console.log('\nIndustries: real_estate, clinic, car_dealership, driving_school, home_services, generic, shopify');
   const industry = await prompt('Industry: ');
-  if (!['real_estate', 'clinic', 'car_dealership', 'driving_school', 'home_services', 'generic'].includes(industry)) {
+  if (!['real_estate', 'clinic', 'car_dealership', 'driving_school', 'home_services', 'generic', 'shopify'].includes(industry)) {
     console.log('❌ Invalid industry'); return;
   }
 
@@ -105,15 +105,32 @@ async function addClient() {
     questions = await collectCustomQuestions();
   }
 
+  // Shopify credentials (if applicable)
+  let shopifySettings: Record<string, unknown> = {};
+  if (industry === 'shopify') {
+    console.log('\n── Shopify Credentials ──');
+    const shopifyDomain = await prompt('Shopify store domain (e.g. my-store.myshopify.com): ');
+    if (!shopifyDomain) { console.log('❌ Shopify domain required'); return; }
+    const storefrontToken = await prompt('Storefront Access Token: ');
+    if (!storefrontToken) { console.log('❌ Storefront Access Token required'); return; }
+    shopifySettings = {
+      domain: shopifyDomain.trim(),
+      storefrontToken: storefrontToken.trim(),
+      currency: 'SAR',
+      notifyOnOrder: true
+    };
+  }
+
   // Generate IDs
   const clientId = generateClientId(nameEn || name);
   const verifyToken = generateVerifyToken();
 
   // Settings (matches your DB schema)
-  const settings = {
+  const settings: Record<string, unknown> = {
     welcome_message: `مرحباً بك في ${name}! 👋\n\nكيف نقدر نخدمك اليوم؟`,
     thank_you_message: 'شكراً لك! ✅\n\nتم استلام طلبك وسيتواصل معك أحد ممثلينا قريباً.',
-    agent_name: 'الوكيل'
+    agent_name: 'الوكيل',
+    ...(industry === 'shopify' && Object.keys(shopifySettings).length > 0 ? { shopify: shopifySettings } : {})
   };
 
   // Summary
@@ -340,6 +357,9 @@ function getDefaultQuestions(industry: string): any[] {
       { id: 'q1', text: 'كيف نقدر نساعدك؟', options: ['أبي أعرف عن الخدمات', 'أبي أعرف الأسعار', 'أبي أحجز موعد', 'أبي أتكلم مع شخص'] },
       { id: 'q2', text: 'كيف سمعت عنا؟', options: ['سناب شات / انستقرام', 'توصية من صديق', 'بحث قوقل', 'إعلان'] },
       { id: 'q3', text: 'وش الاستعجال؟', options: ['أحتاجها الحين', 'خلال هالأسبوع', 'أتصفح بس'] }
+    ],
+    shopify: [
+      { id: 'q1', text: 'كيف نقدر نساعدك؟', options: ['تصفح المنتجات', 'البحث عن منتج', 'متابعة طلب', 'تكلم مع موظف'] }
     ]
   };
   return defaults[industry] || defaults.generic;
