@@ -1,6 +1,6 @@
 import { sendWhatsAppMessage, sendWhatsAppButtons, sendWhatsAppList } from './services/whatsapp.js';
 import { getConversation, saveConversation, createLead, getClientByPhoneNumberId, createAppointment } from './services/database.js';
-import { formatMessage, getDefaultMessages, ClientMessages } from './messages.js';
+import { formatMessage, getDefaultMessages, ClientMessages, SHOPIFY_MESSAGES, SHOPIFY_EXTRA_MESSAGES } from './messages.js';
 import { saveLeadToSheet } from './services/googleSheets.js';
 import { 
   generateKnowledgeResponse, 
@@ -20,6 +20,14 @@ import {
   DEFAULT_APPOINTMENT_SETTINGS,
   type AppointmentSettings
 } from './services/appointments.js';
+import {
+  fetchProducts,
+  searchProducts,
+  getProductById,
+  createCheckout,
+  formatPriceSAR,
+  type ShopifyProduct
+} from './services/shopify.js';
 
 // ============================================================
 // TYPES
@@ -29,7 +37,8 @@ interface ConversationState {
   clientId: string;
   phone: string;
   messages: { role: string; content: string }[];
-  state: 'welcome' | 'questions' | 'appointment_date' | 'appointment_time' | 'completed' | 'chat';
+  state: 'welcome' | 'questions' | 'appointment_date' | 'appointment_time' | 'completed' | 'chat'
+       | 'shopify_browse' | 'shopify_search' | 'shopify_product' | 'shopify_cart' | 'shopify_confirmed';
   step: number;
   data: Record<string, any>;
   createdAt: string;
@@ -204,6 +213,22 @@ export async function handleIncomingMessage(
     case 'appointment_time':
       await handleAppointmentTime(client, conv, message, clientMessages, appointmentSettings, accessToken);
       break;
+    // Shopify states
+    case 'shopify_browse':
+      await handleShopifyBrowse(client, conv, message, accessToken);
+      break;
+    case 'shopify_search':
+      await handleShopifySearch(client, conv, message, accessToken);
+      break;
+    case 'shopify_product':
+      await handleShopifyProduct(client, conv, message, accessToken);
+      break;
+    case 'shopify_cart':
+      await handleShopifyCart(client, conv, message, clientMessages, accessToken);
+      break;
+    case 'shopify_confirmed':
+      await handleShopifyConfirmed(client, conv, message, accessToken);
+      break;
     case 'completed':
       // Transition to chat state for any follow-up
       conv.state = 'chat';
@@ -267,10 +292,6 @@ async function handleWelcome(
   
   await sendQuestion(client, conv, messages, accessToken);
 }
-
-/**
- * Questions state: Collect answers via buttons/lists
- */
 async function handleQuestions(
   client: any, 
   conv: ConversationState, 
@@ -329,8 +350,10 @@ async function handleQuestions(
   if (nextQuestion) {
     await sendQuestion(client, conv, messages, accessToken);
   } else {
-    // All questions answered
-    if (features.appointment_setting) {
+    // All questions answered — route Shopify industry to product browsing
+    if (client.industry === 'shopify' || client.industry === 'ecommerce') {
+      await routeShopifyIntent(client, conv, selectedOption, accessToken);
+    } else if (features.appointment_setting) {
       await startAppointmentFlow(client, conv, messages, appointmentSettings, accessToken);
     } else {
       await completeLead(client, conv, messages, features, null, accessToken);
@@ -668,6 +691,399 @@ async function handleHandoverRequest(
   }
   
   conv.data.handoverRequested = true;
+}
+
+// ============================================================
+// SHOPIFY FLOW
+// ============================================================
+
+/** Get Shopify config from client settings */
+function getShopifyConfig(client: any): { domain: string; storefrontToken: string } | null {
+  const shopify = client.settings?.shopify;
+  if (!shopify?.domain || !shopify?.storefrontToken) return null;
+  return { domain: shopify.domain, storefrontToken: shopify.storefrontToken };
+}
+
+/** Route customer to the right Shopify state based on their first question answer */
+async function routeShopifyIntent(
+  client: any,
+  conv: ConversationState,
+  selectedOption: string,
+  accessToken: string
+): Promise<void> {
+  if (selectedOption === 'تصفح المنتجات') {
+    conv.state = 'shopify_browse';
+    await showShopifyProductList(client, conv, accessToken);
+  } else if (selectedOption === 'البحث عن منتج') {
+    conv.state = 'shopify_search';
+    const searchPrompt = SHOPIFY_EXTRA_MESSAGES.searchPrompt;
+    await sendWhatsAppMessage(conv.phone, searchPrompt, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: searchPrompt });
+  } else if (selectedOption === 'متابعة طلب' || selectedOption === 'تكلم مع موظف') {
+    // Route to handover / agent
+    const handoverMsg = 'تمام! بنحولك لأحد فريقنا يساعدك. 🙏';
+    await sendWhatsAppMessage(conv.phone, handoverMsg, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: handoverMsg });
+    for (const agentPhone of client.agent_phones || []) {
+      try {
+        const notif = `📞 *طلب تحويل - ${selectedOption}*\n\n👤 ${conv.data.name || 'غير معروف'}\n📱 ${conv.phone}\n💬 wa.me/${conv.phone.replace('+', '')}\n⏰ ${new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' })}`;
+        await sendWhatsAppMessage(agentPhone, notif, accessToken, client.phone_number_id);
+      } catch (err) {
+        console.error('❌ Agent notify error:', err);
+      }
+    }
+    conv.state = 'chat';
+  } else {
+    // Default to browse
+    conv.state = 'shopify_browse';
+    await showShopifyProductList(client, conv, accessToken);
+  }
+}
+
+/** Fetch and display products as a WhatsApp list */
+async function showShopifyProductList(
+  client: any,
+  conv: ConversationState,
+  accessToken: string
+): Promise<void> {
+  const config = getShopifyConfig(client);
+  if (!config) {
+    await sendWhatsAppMessage(conv.phone, SHOPIFY_EXTRA_MESSAGES.apiError, accessToken, client.phone_number_id);
+    return;
+  }
+
+  const products = await fetchProducts(config.domain, config.storefrontToken, 10);
+
+  if (products.length === 0) {
+    await sendWhatsAppMessage(conv.phone, SHOPIFY_EXTRA_MESSAGES.noProducts, accessToken, client.phone_number_id);
+    return;
+  }
+
+  // Store products for reference by index
+  conv.data.shopifyProducts = products;
+
+  const listItems = products.map((p, i) => ({
+    id: `product_${i}`,
+    title: p.title.substring(0, 24),
+    description: `${formatPriceSAR(p.priceMin)} ريال`
+  }));
+
+  await sendWhatsAppList(
+    conv.phone,
+    SHOPIFY_EXTRA_MESSAGES.productList,
+    'اختر منتج',
+    listItems,
+    accessToken,
+    client.phone_number_id
+  );
+  conv.messages.push({ role: 'assistant', content: SHOPIFY_EXTRA_MESSAGES.productList });
+}
+
+/**
+ * shopify_browse state: Customer is viewing product list, select a product
+ */
+async function handleShopifyBrowse(
+  client: any,
+  conv: ConversationState,
+  message: string,
+  accessToken: string
+): Promise<void> {
+  const products: ShopifyProduct[] = conv.data.shopifyProducts || [];
+  const normalizedMessage = normalizeArabicNumbers(message.trim());
+
+  // Match by product index ("product_N"), by number, or by title
+  let selectedProduct: ShopifyProduct | undefined;
+
+  if (message.startsWith('product_')) {
+    const idx = parseInt(message.replace('product_', ''));
+    selectedProduct = products[idx];
+  } else {
+    const num = parseInt(normalizedMessage);
+    if (num >= 1 && num <= products.length) {
+      selectedProduct = products[num - 1];
+    } else {
+      selectedProduct = products.find(p => p.title.toLowerCase().includes(message.toLowerCase().trim()));
+    }
+  }
+
+  if (!selectedProduct) {
+    // Re-show list
+    await sendWhatsAppMessage(conv.phone, SHOPIFY_EXTRA_MESSAGES.noProducts, accessToken, client.phone_number_id);
+    await showShopifyProductList(client, conv, accessToken);
+    return;
+  }
+
+  conv.data.selectedProductId = selectedProduct.id;
+  conv.data.selectedProductTitle = selectedProduct.title;
+  conv.data.selectedVariantId = selectedProduct.variants.find(v => v.available)?.id || selectedProduct.variants[0]?.id;
+  conv.data.selectedProductPrice = selectedProduct.priceMin;
+  conv.state = 'shopify_product';
+
+  await showShopifyProductDetails(client, conv, selectedProduct, accessToken);
+}
+
+/** Show product details with "اطلب الحين" button */
+async function showShopifyProductDetails(
+  client: any,
+  conv: ConversationState,
+  product: ShopifyProduct,
+  accessToken: string
+): Promise<void> {
+  const description = product.description
+    ? product.description.substring(0, 200)
+    : '';
+
+  const detailMsg = formatMessage(SHOPIFY_EXTRA_MESSAGES.productDetails, {
+    productName: product.title,
+    price: formatPriceSAR(product.priceMin),
+    description
+  });
+
+  await sendWhatsAppButtons(
+    conv.phone,
+    detailMsg,
+    [{ id: 'order_now', title: SHOPIFY_EXTRA_MESSAGES.orderButton }],
+    accessToken,
+    client.phone_number_id
+  );
+  conv.messages.push({ role: 'assistant', content: detailMsg });
+}
+
+/**
+ * shopify_search state: Customer typed a search term
+ */
+async function handleShopifySearch(
+  client: any,
+  conv: ConversationState,
+  message: string,
+  accessToken: string
+): Promise<void> {
+  const config = getShopifyConfig(client);
+  if (!config) {
+    await sendWhatsAppMessage(conv.phone, SHOPIFY_EXTRA_MESSAGES.apiError, accessToken, client.phone_number_id);
+    return;
+  }
+
+  const results = await searchProducts(config.domain, config.storefrontToken, message, 10);
+
+  if (results.length === 0) {
+    await sendWhatsAppMessage(conv.phone, SHOPIFY_EXTRA_MESSAGES.noSearchResults, accessToken, client.phone_number_id);
+    // Offer to browse all
+    await showShopifyProductList(client, conv, accessToken);
+    conv.state = 'shopify_browse';
+    return;
+  }
+
+  // Store search results as the current product list and show them
+  conv.data.shopifyProducts = results;
+  conv.state = 'shopify_browse';
+  await showShopifyProductList(client, conv, accessToken);
+}
+
+/**
+ * shopify_product state: Customer is viewing product details
+ * Expects "اطلب الحين" / "order_now" or any confirmation
+ */
+async function handleShopifyProduct(
+  client: any,
+  conv: ConversationState,
+  message: string,
+  accessToken: string
+): Promise<void> {
+  const lower = message.toLowerCase().trim();
+  const isOrder = lower === 'order_now' || message.includes('اطلب') || message.includes('أطلب') || message === '1';
+
+  if (!isOrder) {
+    // Re-show product details
+    const config = getShopifyConfig(client);
+    if (conv.data.selectedProductId && config) {
+      const product = await getProductById(config.domain, config.storefrontToken, conv.data.selectedProductId);
+      if (product) {
+        await showShopifyProductDetails(client, conv, product, accessToken);
+        return;
+      }
+    }
+    // Fallback: show buttons again
+    await sendWhatsAppButtons(
+      conv.phone,
+      `تبي تطلب *${conv.data.selectedProductTitle || 'المنتج'}*؟`,
+      [{ id: 'order_now', title: SHOPIFY_EXTRA_MESSAGES.orderButton }],
+      accessToken,
+      client.phone_number_id
+    );
+    return;
+  }
+
+  // Create checkout
+  const config = getShopifyConfig(client);
+  if (!config || !conv.data.selectedVariantId) {
+    await sendWhatsAppMessage(conv.phone, SHOPIFY_EXTRA_MESSAGES.apiError, accessToken, client.phone_number_id);
+    return;
+  }
+
+  conv.state = 'shopify_cart';
+  const checkout = await createCheckout(config.domain, config.storefrontToken, conv.data.selectedVariantId, 1);
+
+  if (!checkout) {
+    await sendWhatsAppMessage(conv.phone, SHOPIFY_EXTRA_MESSAGES.apiError, accessToken, client.phone_number_id);
+    conv.state = 'shopify_product';
+    return;
+  }
+
+  conv.data.checkoutUrl = checkout.checkoutUrl;
+  conv.data.checkoutPrice = checkout.totalPrice;
+
+  // Send checkout link to customer
+  const checkoutMsg = formatMessage(SHOPIFY_EXTRA_MESSAGES.checkoutLink, { checkoutUrl: checkout.checkoutUrl });
+  await sendWhatsAppMessage(conv.phone, checkoutMsg, accessToken, client.phone_number_id);
+  conv.messages.push({ role: 'assistant', content: checkoutMsg });
+
+  // Notify owner
+  const orderNotification = formatMessage(SHOPIFY_MESSAGES.agentNotification, {
+    name: conv.data.name || 'غير معروف',
+    phone: conv.phone,
+    whatsapp: conv.phone.replace('+', ''),
+    productName: conv.data.selectedProductTitle || '-',
+    price: formatPriceSAR(conv.data.selectedProductPrice || conv.data.checkoutPrice),
+    checkoutUrl: checkout.checkoutUrl,
+    time: new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' })
+  });
+
+  for (const agentPhone of client.agent_phones || []) {
+    try {
+      await sendWhatsAppMessage(agentPhone, orderNotification, accessToken, client.phone_number_id);
+    } catch (err) {
+      console.error('❌ Order notify error:', err);
+    }
+  }
+
+  // Prompt customer to confirm payment
+  await sendWhatsAppButtons(
+    conv.phone,
+    'بعد ما تكمل الدفع، اضغط الزر أدناه لتأكيد طلبك ✅',
+    [{ id: 'confirm_payment', title: SHOPIFY_EXTRA_MESSAGES.confirmPaymentButton }],
+    accessToken,
+    client.phone_number_id
+  );
+}
+
+/**
+ * shopify_cart state: Waiting for payment confirmation from customer
+ */
+async function handleShopifyCart(
+  client: any,
+  conv: ConversationState,
+  message: string,
+  messages: ClientMessages,
+  accessToken: string
+): Promise<void> {
+  const lower = message.toLowerCase().trim();
+  const isConfirm = lower === 'confirm_payment'
+    || message.includes('تأكيد الدفع')
+    || message.includes('تأكيد')
+    || message.includes('دفعت')
+    || message.includes('تم الدفع');
+
+  if (!isConfirm) {
+    // Re-prompt
+    await sendWhatsAppButtons(
+      conv.phone,
+      'بعد ما تكمل الدفع، اضغط الزر أدناه ✅',
+      [{ id: 'confirm_payment', title: SHOPIFY_EXTRA_MESSAGES.confirmPaymentButton }],
+      accessToken,
+      client.phone_number_id
+    );
+    return;
+  }
+
+  conv.state = 'shopify_confirmed';
+
+  // Confirm to customer
+  const confirmMsg = formatMessage(SHOPIFY_EXTRA_MESSAGES.orderConfirmed, {
+    name: conv.data.name || ''
+  });
+  await sendWhatsAppMessage(conv.phone, confirmMsg, accessToken, client.phone_number_id);
+  conv.messages.push({ role: 'assistant', content: confirmMsg });
+
+  // Thank you
+  const thankYouMsg = formatMessage(messages.thankYou, { businessName: client.name });
+  await sendWhatsAppMessage(conv.phone, thankYouMsg, accessToken, client.phone_number_id);
+  conv.messages.push({ role: 'assistant', content: thankYouMsg });
+
+  // Payment confirmation to owner
+  const paymentNotif = formatMessage(SHOPIFY_EXTRA_MESSAGES.paymentConfirmation, {
+    name: conv.data.name || 'غير معروف',
+    phone: conv.phone,
+    productName: conv.data.selectedProductTitle || '-',
+    price: formatPriceSAR(conv.data.selectedProductPrice || conv.data.checkoutPrice || '0'),
+    time: new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' })
+  });
+
+  for (const agentPhone of client.agent_phones || []) {
+    try {
+      await sendWhatsAppMessage(agentPhone, paymentNotif, accessToken, client.phone_number_id);
+    } catch (err) {
+      console.error('❌ Payment notify error:', err);
+    }
+  }
+
+  // Save lead in DB
+  try {
+    await createLead({
+      clientId: client.id,
+      phone: conv.phone,
+      name: conv.data.name || '',
+      email: '',
+      data: conv.data,
+      score: 'hot'
+    });
+  } catch (err) {
+    console.error('❌ Lead save error (shopify):', err);
+  }
+
+  console.log(`✅ Shopify order confirmed: ${conv.data.name} (${conv.phone}) - ${conv.data.selectedProductTitle}`);
+}
+
+/**
+ * shopify_confirmed state: Order confirmed, handle follow-up messages
+ */
+async function handleShopifyConfirmed(
+  client: any,
+  conv: ConversationState,
+  message: string,
+  accessToken: string
+): Promise<void> {
+  // Check for follow-up intents (cancel, status, etc.)
+  const intent = detectPostCompletionIntent(message);
+  if (intent.forwardToAgent) {
+    const response = INTENT_RESPONSES[intent.type];
+    if (response) {
+      await sendWhatsAppMessage(conv.phone, response, accessToken, client.phone_number_id);
+      conv.messages.push({ role: 'assistant', content: response });
+    }
+    const notificationTemplate = INTENT_AGENT_NOTIFICATIONS[intent.type];
+    if (notificationTemplate) {
+      const notification = formatMessage(notificationTemplate, {
+        name: conv.data.name || 'غير معروف',
+        phone: conv.phone,
+        whatsapp: conv.phone.replace('+', ''),
+        message,
+        time: new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' })
+      });
+      for (const agentPhone of client.agent_phones || []) {
+        try {
+          await sendWhatsAppMessage(agentPhone, notification, accessToken, client.phone_number_id);
+        } catch (error) {
+          console.error('❌ Agent notify error:', error);
+        }
+      }
+    }
+    return;
+  }
+
+  const fallbackMsg = `أهلاً ${conv.data.name || ''}! 👋\nطلبك على طريقه. إذا تحتاج مساعدة، رد بـ "موظف".`;
+  await sendWhatsAppMessage(conv.phone, fallbackMsg, accessToken, client.phone_number_id);
+  conv.messages.push({ role: 'assistant', content: fallbackMsg });
 }
 
 // ============================================================
