@@ -145,7 +145,7 @@ async function shopifyGraphQL(
   query: string,
   variables: Record<string, unknown>
 ): Promise<unknown> {
-  const url = `https://${shopifyDomain}/api/2024-01/graphql.json`;
+  const url = `https://${shopifyDomain}/api/2026-04/graphql.json`;
 
   const response = await fetch(url, {
     method: 'POST',
