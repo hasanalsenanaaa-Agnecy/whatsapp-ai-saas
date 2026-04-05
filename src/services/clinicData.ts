@@ -62,8 +62,8 @@ export async function fetchClinicData(
       return null;
     }
 
-    const allData = await allDataRes.json() as any;
-    const offersData = await offersRes.json() as any;
+    const allData = await allDataRes.json();
+    const offersData = await offersRes.json();
 
     const data: ClinicData = {
       clinic: allData.clinic,
