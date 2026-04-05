@@ -210,10 +210,14 @@ export async function handleIncomingMessage(
 
   // AI CONVERSATION MODE — skip rigid flow entirely
   if (features.ai_conversation && isAIConversationAvailable()) {
-    // For new conversations or those already in AI mode, use AI handler
     if (conv.state === 'welcome' || conv.state === 'ai_conversation') {
       conv.state = 'ai_conversation';
       await handleAIConversation(client, conv, message, features, accessToken);
+      await saveConversation(conv);
+      return;
+    }
+    // AI mode completed — don't respond to further messages
+    if (conv.state === 'completed' || conv.state === 'chat') {
       await saveConversation(conv);
       return;
     }
@@ -601,8 +605,8 @@ async function handleAIConversation(
   // Send ONE message — buttons/list take priority over plain text
   if (parsed.buttons && parsed.buttons.options.length > 0) {
     const opts = parsed.buttons.options.slice(0, 3);
-    // Combine: use text + button body as the message
-    const body = parsed.text ? `${parsed.text}\n\n${parsed.buttons.body}` : parsed.buttons.body;
+    // Use text as body if it exists, otherwise use button body
+    const body = parsed.text || parsed.buttons.body;
     await sendWhatsAppButtons(
       conv.phone,
       body,
@@ -613,7 +617,7 @@ async function handleAIConversation(
     conv.messages.push({ role: 'assistant', content: body });
   } else if (parsed.list && parsed.list.options.length > 0) {
     const opts = parsed.list.options.slice(0, 10);
-    const body = parsed.text ? `${parsed.text}\n\n${parsed.list.body}` : parsed.list.body;
+    const body = parsed.text || parsed.list.body;
     await sendWhatsAppList(
       conv.phone,
       body,
@@ -1319,20 +1323,21 @@ async function completeLead(
     }
   }
 
-  // Send thank you to customer
-  let thankYouMsg: string;
-  if (features.appointment_setting && appointmentId) {
-    thankYouMsg = formatMessage(messages.thankYouWithAppointment, {
-      name: conv.data.name,
-      appointmentDate: conv.data.appointmentDateLabel || conv.data.appointmentDate,
-      appointmentTime: conv.data.appointmentTimeLabel
-    });
-  } else {
-    thankYouMsg = formatMessage(messages.thankYou, { name: conv.data.name });
+  // Send thank you to customer (skip if AI mode already sent one)
+  if (!features.ai_conversation) {
+    let thankYouMsg: string;
+    if (features.appointment_setting && appointmentId) {
+      thankYouMsg = formatMessage(messages.thankYouWithAppointment, {
+        name: conv.data.name,
+        appointmentDate: conv.data.appointmentDateLabel || conv.data.appointmentDate,
+        appointmentTime: conv.data.appointmentTimeLabel
+      });
+    } else {
+      thankYouMsg = formatMessage(messages.thankYou, { name: conv.data.name });
+    }
+    await sendWhatsAppMessage(conv.phone, thankYouMsg, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: thankYouMsg });
   }
-
-  await sendWhatsAppMessage(conv.phone, thankYouMsg, accessToken, client.phone_number_id);
-  conv.messages.push({ role: 'assistant', content: thankYouMsg });
   conv.state = 'completed';
 
   console.log(`✅ Lead captured: ${conv.data.name} (${conv.phone}) - Score: ${leadScore}${appointmentId ? ' + Appointment' : ''}`);
