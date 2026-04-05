@@ -130,7 +130,7 @@ async function addClient() {
     welcome_message: `مرحباً بك في ${name}! 👋\n\nكيف نقدر نخدمك اليوم؟`,
     thank_you_message: 'شكراً لك! ✅\n\nتم استلام طلبك وسيتواصل معك أحد ممثلينا قريباً.',
     agent_name: 'الوكيل',
-    ...(industry === 'shopify' && Object.keys(shopifySettings).length > 0 ? { shopify: shopifySettings } : {})
+    ...(industry === 'shopify' ? { shopify: shopifySettings } : {})
   };
 
   // Summary

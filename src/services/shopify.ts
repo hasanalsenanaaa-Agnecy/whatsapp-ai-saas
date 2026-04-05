@@ -196,10 +196,11 @@ function parseProduct(node: Record<string, unknown>): ShopifyProduct {
   };
 }
 
-/** Format a price amount in SAR with Arabic locale */
+/** Format a price amount as a locale-formatted number (no currency symbol — templates add "ريال") */
 export function formatPriceSAR(amount: string | number): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  return num.toLocaleString('ar-SA', { style: 'currency', currency: 'SAR', minimumFractionDigits: 0 });
+  if (isNaN(num)) return '0';
+  return num.toLocaleString('ar-SA', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
 // ============================================================
