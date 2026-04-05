@@ -256,6 +256,26 @@ wa.me/{whatsapp}`
 };
 
 // ============================================================
+// DENTAL CLINIC MESSAGES (Perfect Smile)
+// ============================================================
+export const DENTAL_CLINIC_MESSAGES: ClientMessages = {
+  welcome: `أهلاً وسهلاً في {businessName}! 🦷\n\nوش اسمك الكريم؟`,
+  askName: `وش اسمك الكريم؟`,
+  questions: [], // not used — clinic flow is handled dynamically in handleClinicFlow()
+  thankYou: `شكراً يا {name}! ✅\n\nتم استلام طلبك وسيتواصل معك فريقنا قريباً.\n\n📍 {address}\n⏰ {workingHours}`,
+  thankYouWithAppointment: `شكراً يا {name}! ✅\n\nتم استلام طلبك وسيتواصل معك فريقنا قريباً.\n\n📍 {address}`,
+  invalidInput: `اختر من الخيارات المتاحة 👆`,
+  agentNotification: `🦷 *مريض جديد - بوت واتساب*\n\n👤 {name}\n📱 {phone}\n\n📋 {details}\n⏰ {time}\n\nwa.me/{whatsapp}`,
+  appointmentNotification: `📅 *طلب موعد جديد*\n\n👤 {name}\n📱 {phone}\n📋 {details}\n\nwa.me/{whatsapp}`,
+  askAppointmentDate: `متى يناسبك الموعد؟`,
+  askAppointmentTime: `أي وقت يناسبك؟`,
+  appointmentConfirmed: `تمام يا {name}! ✅\n\nتم تسجيل طلبك.`,
+  appointmentReminder: `مرحبا {name}! 👋\n\nتذكير بموعدك اليوم {appointmentTime} في {businessName}.\nنتطلع لخدمتك! ✨`,
+  handoverDetected: `فهمت! خليني أحولك للاستقبال.\nبيتواصلون معك في أقرب وقت. 🙏`,
+  handoverAgentNotification: `🔴 *طلب تحويل للموظف*\n\n👤 {name}\n📱 {phone}\n\nآخر رسالة: {lastMessage}\n\nwa.me/{whatsapp}`
+};
+
+// ============================================================
 // GENERIC MESSAGES (default)
 // ============================================================
 export const GENERIC_MESSAGES: ClientMessages = {
@@ -426,9 +446,10 @@ export function getDefaultMessages(industry: string): ClientMessages {
   switch (industry) {
     case 'real_estate': 
       return REAL_ESTATE_MESSAGES;
+    case 'dental':
+      return DENTAL_CLINIC_MESSAGES;
     case 'clinic':
     case 'medical':
-    case 'dental':
     case 'healthcare':
       return CLINIC_MESSAGES;
     case 'dealership':
