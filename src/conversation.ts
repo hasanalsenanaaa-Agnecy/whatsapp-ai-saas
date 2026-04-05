@@ -28,6 +28,10 @@ import {
   formatPriceSAR,
   type ShopifyProduct
 } from './services/shopify.js';
+import {
+  getAIResponse,
+  isAIConversationAvailable
+} from './services/ai-conversation.js';
 
 // ============================================================
 // TYPES
@@ -38,7 +42,8 @@ interface ConversationState {
   phone: string;
   messages: { role: string; content: string }[];
   state: 'welcome' | 'questions' | 'appointment_date' | 'appointment_time' | 'completed' | 'chat'
-       | 'shopify_browse' | 'shopify_search' | 'shopify_product' | 'shopify_cart' | 'shopify_confirmed';
+       | 'shopify_browse' | 'shopify_search' | 'shopify_product' | 'shopify_cart' | 'shopify_confirmed'
+       | 'ai_conversation';
   step: number;
   data: Record<string, any>;
   createdAt: string;
@@ -50,6 +55,7 @@ interface ClientFeatures {
   lead_scoring: boolean;
   handover_detection: boolean;
   appointment_setting: boolean;
+  ai_conversation: boolean;
 }
 
 const CONVERSATION_TIMEOUT_HOURS = 24;
@@ -141,7 +147,8 @@ export async function handleIncomingMessage(
     ai_fallback: client.features?.ai_fallback || false,
     lead_scoring: client.features?.lead_scoring || false,
     handover_detection: client.features?.handover_detection || false,
-    appointment_setting: client.features?.appointment_setting || false
+    appointment_setting: client.features?.appointment_setting || false,
+    ai_conversation: client.features?.ai_conversation || false
   };
 
   // Get appointment settings from client or use defaults
@@ -200,6 +207,18 @@ export async function handleIncomingMessage(
   // ============================================================
   // STATE MACHINE
   // ============================================================
+
+  // AI CONVERSATION MODE — skip rigid flow entirely
+  if (features.ai_conversation && isAIConversationAvailable()) {
+    // For new conversations or those already in AI mode, use AI handler
+    if (conv.state === 'welcome' || conv.state === 'ai_conversation') {
+      conv.state = 'ai_conversation';
+      await handleAIConversation(client, conv, message, features, accessToken);
+      await saveConversation(conv);
+      return;
+    }
+  }
+
   switch (conv.state) {
     case 'welcome':
       await handleWelcome(client, conv, message, clientMessages, features, accessToken);
@@ -228,6 +247,9 @@ export async function handleIncomingMessage(
       break;
     case 'shopify_confirmed':
       await handleShopifyConfirmed(client, conv, message, accessToken);
+      break;
+    case 'ai_conversation':
+      await handleAIConversation(client, conv, message, features, accessToken);
       break;
     case 'completed':
       // Transition to chat state for any follow-up
@@ -403,7 +425,8 @@ async function handleAppointmentTime(
     ai_fallback: client.features?.ai_fallback || false,
     lead_scoring: client.features?.lead_scoring || false,
     handover_detection: client.features?.handover_detection || false,
-    appointment_setting: client.features?.appointment_setting || false
+    appointment_setting: client.features?.appointment_setting || false,
+    ai_conversation: client.features?.ai_conversation || false
   };
   
   const availableSlots = getTimeSlots(appointmentSettings);
@@ -495,6 +518,106 @@ async function handleChat(
     const fallbackMsg = `أهلاً ${name}! 👋\nمعلوماتك وصلتنا وفريقنا بيتواصل معك قريب.\nإذا تبي تتكلم مع أحد فريقنا، رد بـ "موظف" وبنحولك.`;
     await sendWhatsAppMessage(conv.phone, fallbackMsg, accessToken, client.phone_number_id);
     conv.messages.push({ role: 'assistant', content: fallbackMsg });
+  }
+}
+
+// ============================================================
+// AI CONVERSATION MODE
+// Natural AI-driven flow — replaces rigid state machine
+// ============================================================
+
+async function handleAIConversation(
+  client: any,
+  conv: ConversationState,
+  message: string,
+  features: ClientFeatures,
+  accessToken: string
+): Promise<void> {
+  // Build context for AI
+  const questions = client.questions?.length > 0
+    ? client.questions.map((q: any, i: number) => ({
+        text: q.text || q.question || `سؤال ${i + 1}`,
+        options: q.options || [],
+        field: q.field || `answer_${i}`
+      }))
+    : [];
+
+  const promptCtx = {
+    businessName: client.name || '',
+    industry: client.industry || 'generic',
+    questions,
+    knowledgeBase: client.knowledge_base || [],
+    settings: client.settings || {},
+    bookingState: { ...conv.data },
+    customerPhone: conv.phone
+  };
+
+  // Get AI response
+  const { parsed, rawResponse } = await getAIResponse(
+    promptCtx,
+    conv.messages,
+    message
+  );
+
+  console.log(`🤖 AI raw: ${rawResponse.substring(0, 200)}`);
+
+  // Save extracted data
+  if (Object.keys(parsed.data).length > 0) {
+    for (const [key, value] of Object.entries(parsed.data)) {
+      conv.data[key] = value;
+    }
+    console.log(`📝 Data saved:`, parsed.data);
+  }
+
+  // Handle HANDOVER
+  if (parsed.handover) {
+    const defaults = getDefaultMessages(client.industry);
+    await handleHandoverRequest(client, conv, message, defaults, accessToken);
+    return;
+  }
+
+  // Handle COMPLETE — save lead + notify agent
+  if (parsed.complete) {
+    const defaults = getDefaultMessages(client.industry);
+    const appointmentSettings: AppointmentSettings = {
+      ...DEFAULT_APPOINTMENT_SETTINGS,
+      ...client.settings?.appointment
+    };
+    await completeLead(client, conv, defaults, features, appointmentSettings, accessToken);
+    return;
+  }
+
+  // Send the text message
+  if (parsed.text) {
+    await sendWhatsAppMessage(conv.phone, parsed.text, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: parsed.text });
+  }
+
+  // Send buttons if AI requested them
+  if (parsed.buttons && parsed.buttons.options.length > 0) {
+    const opts = parsed.buttons.options.slice(0, 3);
+    await sendWhatsAppButtons(
+      conv.phone,
+      parsed.buttons.body,
+      opts.map((opt, i) => ({ id: `ai_opt_${i}`, title: opt.substring(0, 20) })),
+      accessToken,
+      client.phone_number_id
+    );
+    conv.messages.push({ role: 'assistant', content: `[أزرار] ${parsed.buttons.body}: ${opts.join(' | ')}` });
+  }
+
+  // Send list if AI requested one
+  if (parsed.list && parsed.list.options.length > 0) {
+    const opts = parsed.list.options.slice(0, 10);
+    await sendWhatsAppList(
+      conv.phone,
+      parsed.list.body,
+      parsed.list.buttonText.substring(0, 20),
+      opts.map((opt, i) => ({ id: `ai_list_${i}`, title: opt.substring(0, 24) })),
+      accessToken,
+      client.phone_number_id
+    );
+    conv.messages.push({ role: 'assistant', content: `[قائمة] ${parsed.list.body}: ${opts.join(' | ')}` });
   }
 }
 
