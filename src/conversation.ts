@@ -542,6 +542,11 @@ async function handleAIConversation(
       }))
     : [];
 
+  // Auto-save phone from WhatsApp — no need to ask
+  if (!conv.data.phone) {
+    conv.data.phone = conv.phone;
+  }
+
   const promptCtx = {
     businessName: client.name || '',
     industry: client.industry || 'generic',
@@ -576,48 +581,51 @@ async function handleAIConversation(
     return;
   }
 
-  // Handle COMPLETE — save lead + notify agent
+  // Handle COMPLETE — save lead + notify agent, then STOP
   if (parsed.complete) {
+    // Send final message before completing
+    if (parsed.text) {
+      await sendWhatsAppMessage(conv.phone, parsed.text, accessToken, client.phone_number_id);
+      conv.messages.push({ role: 'assistant', content: parsed.text });
+    }
     const defaults = getDefaultMessages(client.industry);
     const appointmentSettings: AppointmentSettings = {
       ...DEFAULT_APPOINTMENT_SETTINGS,
       ...client.settings?.appointment
     };
     await completeLead(client, conv, defaults, features, appointmentSettings, accessToken);
+    conv.state = 'completed';
     return;
   }
 
-  // Send the text message
-  if (parsed.text) {
-    await sendWhatsAppMessage(conv.phone, parsed.text, accessToken, client.phone_number_id);
-    conv.messages.push({ role: 'assistant', content: parsed.text });
-  }
-
-  // Send buttons if AI requested them
+  // Send ONE message — buttons/list take priority over plain text
   if (parsed.buttons && parsed.buttons.options.length > 0) {
     const opts = parsed.buttons.options.slice(0, 3);
+    // Combine: use text + button body as the message
+    const body = parsed.text ? `${parsed.text}\n\n${parsed.buttons.body}` : parsed.buttons.body;
     await sendWhatsAppButtons(
       conv.phone,
-      parsed.buttons.body,
+      body,
       opts.map((opt, i) => ({ id: `ai_opt_${i}`, title: opt.substring(0, 20) })),
       accessToken,
       client.phone_number_id
     );
-    conv.messages.push({ role: 'assistant', content: `[أزرار] ${parsed.buttons.body}: ${opts.join(' | ')}` });
-  }
-
-  // Send list if AI requested one
-  if (parsed.list && parsed.list.options.length > 0) {
+    conv.messages.push({ role: 'assistant', content: body });
+  } else if (parsed.list && parsed.list.options.length > 0) {
     const opts = parsed.list.options.slice(0, 10);
+    const body = parsed.text ? `${parsed.text}\n\n${parsed.list.body}` : parsed.list.body;
     await sendWhatsAppList(
       conv.phone,
-      parsed.list.body,
+      body,
       parsed.list.buttonText.substring(0, 20),
       opts.map((opt, i) => ({ id: `ai_list_${i}`, title: opt.substring(0, 24) })),
       accessToken,
       client.phone_number_id
     );
-    conv.messages.push({ role: 'assistant', content: `[قائمة] ${parsed.list.body}: ${opts.join(' | ')}` });
+    conv.messages.push({ role: 'assistant', content: body });
+  } else if (parsed.text) {
+    await sendWhatsAppMessage(conv.phone, parsed.text, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: parsed.text });
   }
 }
 
