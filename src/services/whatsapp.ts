@@ -71,6 +71,34 @@ export async function sendWhatsAppButtons(to: string, bodyText: string, buttons:
   }
 }
 
+export async function sendWhatsAppImage(to: string, imageUrl: string, caption: string, accessToken: string, phoneNumberId: string): Promise<boolean> {
+  if (!to || !imageUrl || !accessToken || !phoneNumberId) return false;
+
+  try {
+    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'image',
+        image: { link: imageUrl, caption: caption || '' }
+      })
+    });
+
+    if (!response.ok) {
+      console.error('❌ Image error:', await response.text());
+      // Fallback to text with link
+      return sendWhatsAppMessage(to, `${caption}\n\n🖼️ ${imageUrl}`, accessToken, phoneNumberId);
+    }
+    console.log(`✅ Image sent to ${to}`);
+    return true;
+  } catch (error) {
+    return sendWhatsAppMessage(to, `${caption}\n\n🖼️ ${imageUrl}`, accessToken, phoneNumberId);
+  }
+}
+
 export async function sendWhatsAppList(to: string, bodyText: string, buttonText: string, options: ButtonOption[], accessToken: string, phoneNumberId: string): Promise<boolean> {
   if (!to || !bodyText || !options?.length || !accessToken || !phoneNumberId) return false;
 
