@@ -1,7 +1,7 @@
 // ============================================================
 // SHOPIFY AI AGENT
 // Full e-commerce WhatsApp agent:
-//   Welcome → Show catalog → Selection → Payment link → Receipt
+//   Welcome → Browse choice → (Images?) → Catalog → Selection → Payment link → Receipt
 // Works with tokenless Shopify Storefront API.
 // ============================================================
 
@@ -64,6 +64,9 @@ export async function handleShopifyAgent(
     case 'welcome':
       await handleWelcome(client, conv, config, message, accessToken);
       break;
+    case 'browse_choice':
+      await handleBrowseChoice(client, conv, config, message, accessToken);
+      break;
     case 'catalog':
       await handleCatalogSelection(client, conv, config, message, accessToken);
       break;
@@ -85,7 +88,7 @@ export async function handleShopifyAgent(
 }
 
 // ============================================================
-// STATE: WELCOME — Greet + fetch products + show catalog
+// STATE: WELCOME — Greet + fetch products + ask browse preference
 // ============================================================
 
 async function handleWelcome(
@@ -122,47 +125,82 @@ async function handleWelcome(
     variants: p.variants
   }));
 
-  // Send each product as an image card with price
-  for (const product of products) {
-    const priceText = formatPrice(product.priceMin, config.currency);
-    const caption = `📦 *${product.title}*\n💰 ${priceText}`;
+  // Ask customer preference before sending images
+  await sendWhatsAppButtons(
+    conv.phone,
+    'تبي تشوف صور المنتجات ولا تختار من القائمة مباشرة؟',
+    [
+      { id: 'show_images', title: 'عرض الصور 📸' },
+      { id: 'pick_direct', title: 'اختر مباشرة 📋' }
+    ],
+    accessToken,
+    client.phone_number_id
+  );
 
-    if (product.imageUrl) {
-      await sendWhatsAppImage(conv.phone, product.imageUrl, caption, accessToken, client.phone_number_id);
-    } else {
-      await sendWhatsAppMessage(conv.phone, caption, accessToken, client.phone_number_id);
+  conv.data._shopifyState = 'browse_choice';
+}
+
+// ============================================================
+// STATE: BROWSE_CHOICE — Customer decides images or direct list
+// ============================================================
+
+async function handleBrowseChoice(
+  client: any,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  message: string,
+  accessToken: string
+): Promise<void> {
+  const lower = message.toLowerCase().trim();
+  const products: ShopifyProduct[] = conv.data._products || [];
+
+  const wantsImages = lower === 'show_images' || lower.includes('صور') || lower.includes('شوف');
+  const wantsDirect = lower === 'pick_direct' || lower.includes('مباشرة') || lower.includes('قائمة') || lower.includes('اختر');
+
+  if (wantsImages) {
+    // Send all product images first
+    for (const product of products) {
+      const priceText = formatPrice(product.priceMin, config.currency);
+      const caption = `📦 *${product.title}*\n💰 ${priceText}`;
+      if (product.imageUrl) {
+        await sendWhatsAppImage(conv.phone, product.imageUrl, caption, accessToken, client.phone_number_id);
+      } else {
+        await sendWhatsAppMessage(conv.phone, caption, accessToken, client.phone_number_id);
+      }
+      await sleep(500);
     }
-    // Small delay between messages to maintain order
-    await sleep(500);
+    // Then show selection list
+    await showProductCatalog(client, conv, config, accessToken, 'وش يعجبك؟ اختر المنتج اللي تبيه 👇');
+    conv.data._shopifyState = 'catalog';
+    return;
   }
 
-  // Send product list for selection
-  if (products.length <= 3) {
-    await sendWhatsAppButtons(
-      conv.phone,
-      'وش يعجبك؟ اختر المنتج اللي تبيه 👇',
-      products.map((p, i) => ({
-        id: `pick_${i}`,
-        title: truncate(p.title, 20)
-      })),
-      accessToken,
-      client.phone_number_id
-    );
-  } else {
-    await sendWhatsAppList(
-      conv.phone,
-      'وش يعجبك؟ اختر المنتج اللي تبيه 👇',
-      'المنتجات',
-      products.map((p, i) => ({
-        id: `pick_${i}`,
-        title: truncate(p.title, 24)
-      })),
-      accessToken,
-      client.phone_number_id
-    );
+  if (wantsDirect) {
+    // Skip images, show list directly
+    await showProductCatalog(client, conv, config, accessToken, 'وش يعجبك؟ اختر المنتج اللي تبيه 👇');
+    conv.data._shopifyState = 'catalog';
+    return;
   }
 
-  conv.data._shopifyState = 'catalog';
+  // Maybe they already typed a product name — try to match
+  const matched = matchProduct(message, products);
+  if (matched) {
+    conv.data._shopifyState = 'catalog';
+    await handleCatalogSelection(client, conv, config, message, accessToken);
+    return;
+  }
+
+  // Re-show the choice buttons
+  await sendWhatsAppButtons(
+    conv.phone,
+    'تبي تشوف صور المنتجات ولا تختار من القائمة مباشرة؟',
+    [
+      { id: 'show_images', title: 'عرض الصور 📸' },
+      { id: 'pick_direct', title: 'اختر مباشرة 📋' }
+    ],
+    accessToken,
+    client.phone_number_id
+  );
 }
 
 // ============================================================
@@ -290,25 +328,7 @@ async function handleOrderConfirmation(
   if (lower === 'order_back' || lower.includes('ارجع') || lower.includes('رجوع')) {
     conv.data._shopifyState = 'catalog';
     // Re-show product list
-    const products: ShopifyProduct[] = conv.data._products || [];
-    if (products.length <= 3) {
-      await sendWhatsAppButtons(
-        conv.phone,
-        'تفضل اختر منتج ثاني 👇',
-        products.map((p, i) => ({ id: `pick_${i}`, title: truncate(p.title, 20) })),
-        accessToken,
-        client.phone_number_id
-      );
-    } else {
-      await sendWhatsAppList(
-        conv.phone,
-        'تفضل اختر منتج ثاني 👇',
-        'المنتجات',
-        products.map((p, i) => ({ id: `pick_${i}`, title: truncate(p.title, 24) })),
-        accessToken,
-        client.phone_number_id
-      );
-    }
+    await showProductCatalog(client, conv, config, accessToken, 'تفضل اختر منتج ثاني 👇');
     return;
   }
 
@@ -400,7 +420,13 @@ async function handlePaymentConfirmation(
     return;
   }
 
-  // Confirm payment
+  // Already self-reported — waiting for webhook confirmation
+  if (conv.data._selfReportedAt && conv.data._paymentVerified === false) {
+    await sendWhatsAppMessage(conv.phone, 'ما زلنا نتحقق من الدفع. بنأكد طلبك قريباً ✅', accessToken, client.phone_number_id);
+    return;
+  }
+
+  // Confirm payment (self-reported)
   const isPaid = lower === 'paid_yes' || lower.includes('تم') || lower.includes('دفعت')
     || lower.includes('تأكيد') || lower.includes('done') || lower.includes('paid');
 
@@ -412,7 +438,7 @@ async function handlePaymentConfirmation(
         conv.phone,
         `💳 رابط الدفع:\n${checkoutUrl}\n\nهل دفعت؟`,
         [
-          { id: 'paid_yes', title: 'تم الدفع ✅' },
+          { id: 'paid_yes', title: 'دفعت ✅' },
           { id: 'paid_help', title: 'أحتاج مساعدة' }
         ],
         accessToken,
@@ -422,37 +448,27 @@ async function handlePaymentConfirmation(
     return;
   }
 
-  // ====== PAYMENT CONFIRMED ======
+  // ====== PAYMENT SELF-REPORTED — pending webhook verification ======
+  // Don't send receipt yet; let the Shopify orders/paid webhook confirm it.
+  conv.data._paymentVerified = false;
+  conv.data._selfReportedAt = new Date().toISOString();
+
+  const verifyingMsg = 'شكراً! نتحقق من الدفع وبنأكد طلبك تلقائي ✅';
+  await sendWhatsAppMessage(conv.phone, verifyingMsg, accessToken, client.phone_number_id);
+  conv.messages.push({ role: 'assistant', content: verifyingMsg });
+
+  // Notify owner with unverified warning
+  await notifyOwner(client, conv, config, 'unverified', accessToken);
+
+  // Save lead with unverified flag so owner knows
   const product: ShopifyProduct = conv.data._selectedProduct;
   const checkout = conv.data._checkout;
   const price = formatPrice(checkout?.totalPrice || product.priceMin, checkout?.currency || config.currency);
-
-  // Receipt to customer 🧾
-  const receipt = `✅ *تم تأكيد طلبك بنجاح!*
-
-🧾 *إيصال الطلب:*
-━━━━━━━━━━━━━━━
-📦 المنتج: ${product.title}${conv.data._selectedVariantTitle && conv.data._selectedVariantTitle !== 'Default Title' ? `\n📏 النوع: ${conv.data._selectedVariantTitle}` : ''}
-💰 المبلغ: ${price}
-📱 رقمك: ${conv.phone}
-📅 التاريخ: ${new Date().toLocaleDateString('ar-SA', { timeZone: 'Asia/Riyadh' })}
-━━━━━━━━━━━━━━━
-
-شكراً لتسوقك من *${config.storeName}*! 🙏❤️
-راح نتواصل معك بخصوص التوصيل قريباً 📦`;
-
-  await sendWhatsAppMessage(conv.phone, receipt, accessToken, client.phone_number_id);
-  conv.messages.push({ role: 'assistant', content: receipt });
-
-  // Receipt to owner 📋
-  await notifyOwner(client, conv, config, 'paid', accessToken);
-
-  // Save lead
   try {
     await createLead({
       clientId: client.id,
       phone: conv.phone,
-      name: conv.data.name || '',
+      name: conv.data.name || conv.phone,
       email: '',
       data: {
         product: product.title,
@@ -461,17 +477,16 @@ async function handlePaymentConfirmation(
         currency: checkout?.currency || config.currency,
         checkoutUrl: checkout?.url || '',
         paymentConfirmed: true,
+        paymentVerified: false,
         orderDate: new Date().toISOString()
       },
-      score: 'hot'
+      score: 'warm'
     });
   } catch (err) {
     console.error('❌ Lead save error:', err);
   }
 
-  console.log(`✅ Shopify order: ${conv.phone} → ${product.title} (${price})`);
-
-  conv.data._shopifyState = 'done';
+  console.log(`⏳ Shopify payment self-reported (unverified): ${conv.phone} → ${product.title} (${price})`);
 }
 
 // ============================================================
@@ -488,16 +503,17 @@ async function handlePostOrder(
   const lower = message.toLowerCase().trim();
 
   // New order?
-  if (lower.includes('طلب جديد') || lower.includes('ابي اطلب') || lower.includes('أبي أطلب')
+  if (lower === 'new_order' || lower.includes('طلب جديد') || lower.includes('ابي اطلب') || lower.includes('أبي أطلب')
     || lower.includes('تصفح') || lower.includes('من جديد')) {
-    conv.data._shopifyState = 'welcome';
-    await handleWelcome(client, conv, config, message, accessToken);
+    conv.data._shopifyState = 'catalog';
+    // Reuse cached products — no re-fetching, no image flood
+    await showProductCatalog(client, conv, config, accessToken, 'تفضل اختر منتجك 👇');
     return;
   }
 
   // Cancel / problem → notify owner
   const urgentKeywords = ['الغ', 'الغاء', 'ألغي', 'مشكلة', 'شكوى', 'وين طلبي', 'موظف', 'بشر'];
-  if (urgentKeywords.some(k => lower.includes(k))) {
+  if (lower === 'talk_agent' || urgentKeywords.some(k => lower.includes(k))) {
     await sendWhatsAppMessage(conv.phone, 'تم! فريقنا بيتواصل معك خلال دقائق. 🙏', accessToken, client.phone_number_id);
     await notifyOwner(client, conv, config, 'urgent', accessToken);
     return;
@@ -587,7 +603,7 @@ async function notifyOwner(
   client: any,
   conv: ConversationState,
   config: ShopifyAgentConfig,
-  type: 'paid' | 'help' | 'urgent',
+  type: 'paid' | 'help' | 'urgent' | 'unverified',
   accessToken: string
 ): Promise<void> {
   const product = conv.data._selectedProduct as ShopifyProduct | undefined;
@@ -597,13 +613,14 @@ async function notifyOwner(
     checkout?.currency || config.currency
   );
   const time = new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' });
+  const displayName = conv.data.name || conv.phone;
 
   let notification = '';
 
   if (type === 'paid') {
     notification = `✅ *طلب مدفوع — ${config.storeName}*
 
-👤 العميل: ${conv.data.name || 'غير معروف'}
+👤 العميل: ${displayName}
 📱 ${conv.phone}
 💬 wa.me/${conv.phone.replace('+', '')}
 
@@ -612,10 +629,23 @@ async function notifyOwner(
 🔗 ${checkout?.url || '-'}
 
 ⏰ ${time}`;
+  } else if (type === 'unverified') {
+    notification = `⏳ *طلب بانتظار التحقق — ${config.storeName}*
+
+👤 العميل: ${displayName}
+📱 ${conv.phone}
+💬 wa.me/${conv.phone.replace('+', '')}
+
+📦 المنتج: ${product?.title || '-'}${conv.data._selectedVariantTitle && conv.data._selectedVariantTitle !== 'Default Title' ? `\n📏 النوع: ${conv.data._selectedVariantTitle}` : ''}
+💰 المبلغ: ${price}
+🔗 ${checkout?.url || '-'}
+
+⚠️ لم يتم التحقق من الدفع بعد
+⏰ ${time}`;
   } else if (type === 'help') {
     notification = `⚠️ *عميل يحتاج مساعدة — ${config.storeName}*
 
-👤 ${conv.data.name || 'غير معروف'}
+👤 ${displayName}
 📱 ${conv.phone}
 💬 wa.me/${conv.phone.replace('+', '')}
 
@@ -626,7 +656,7 @@ async function notifyOwner(
   } else {
     notification = `🚨 *طلب عاجل — ${config.storeName}*
 
-👤 ${conv.data.name || 'غير معروف'}
+👤 ${displayName}
 📱 ${conv.phone}
 💬 wa.me/${conv.phone.replace('+', '')}
 
@@ -659,6 +689,84 @@ async function notifyOwner(
 
 function truncate(text: string, max: number): string {
   return text.length > max ? text.substring(0, max - 1) + '…' : text;
+}
+
+// ============================================================
+// SMART TITLE — puts weight + key differentiator first
+// so they survive WhatsApp's 24-char list title limit
+// e.g. "Jumbo Premium Royal Khalas Dates, 2kg" → "2kg Jumbo Khalas"
+// ============================================================
+
+function smartTitle(title: string, max: number): string {
+  // Extract weight (e.g. 2kg, 1kg, 900g, 2 kg)
+  const weightMatch = title.match(/(\d+(?:\.\d+)?)\s*(kg|g)\b/i);
+  const weight = weightMatch ? weightMatch[0].replace(/\s+/g, '').toLowerCase() : null;
+
+  // Key qualifiers (ordered by importance)
+  const qualifiers = ['Jumbo', 'Premium'];
+  const foundQualifier = qualifiers.find(q => title.toLowerCase().includes(q.toLowerCase()));
+
+  // Date variety names
+  const varieties = ['Khalas', 'Sagai', 'Sukkari', 'Ajwa', 'Medjool', 'Mabroom', 'Safawi'];
+  const foundVariety = varieties.find(v => title.toLowerCase().includes(v.toLowerCase()));
+
+  // Special extra descriptor after variety (e.g. "Ajwa Al-Madinah")
+  let extra = '';
+  if (foundVariety) {
+    const afterVariety = title.substring(title.toLowerCase().indexOf(foundVariety.toLowerCase()) + foundVariety.length);
+    const extraMatch = afterVariety.match(/^[\s-]+(Al-\w+|\w+)/i);
+    if (extraMatch && extraMatch[1] && !['Dates', 'Date'].includes(extraMatch[1])) {
+      extra = ' ' + extraMatch[1];
+    }
+  }
+
+  if (!weight && !foundQualifier && !foundVariety) {
+    return truncate(title, max);
+  }
+
+  // Build compact title: weight first, then qualifier, then variety
+  const parts: string[] = [];
+  if (weight) parts.push(weight);
+  if (foundQualifier) parts.push(foundQualifier);
+  if (foundVariety) parts.push(foundVariety + extra);
+  const compact = parts.join(' ');
+  return truncate(compact, max);
+}
+
+// ============================================================
+// SHOW PRODUCT CATALOG — reusable helper, no images
+// ============================================================
+
+async function showProductCatalog(
+  client: any,
+  conv: ConversationState,
+  _config: ShopifyAgentConfig,
+  accessToken: string,
+  prompt: string
+): Promise<void> {
+  const products: ShopifyProduct[] = conv.data._products || [];
+  if (products.length === 0) {
+    await sendWhatsAppMessage(conv.phone, 'ما فيه منتجات محفوظة. تواصل مع الدعم.', accessToken, client.phone_number_id);
+    return;
+  }
+  if (products.length <= 3) {
+    await sendWhatsAppButtons(
+      conv.phone,
+      prompt,
+      products.map((p, i) => ({ id: `pick_${i}`, title: smartTitle(p.title, 20) })),
+      accessToken,
+      client.phone_number_id
+    );
+  } else {
+    await sendWhatsAppList(
+      conv.phone,
+      prompt,
+      'المنتجات',
+      products.map((p, i) => ({ id: `pick_${i}`, title: smartTitle(p.title, 24) })),
+      accessToken,
+      client.phone_number_id
+    );
+  }
 }
 
 function sleep(ms: number): Promise<void> {
