@@ -4,6 +4,7 @@ import { initDatabase, getClientByPhoneNumberId } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
 import { handleReminderCron } from './cron/reminders.js';
+import { handleShopifyWebhook } from './services/shopify-webhook.js';
 import crypto from 'crypto';
 import { sendAlert, alertError } from './services/alerts.js';
 
@@ -42,8 +43,8 @@ function extractMessageText(payload: any): string | null {
   if (!message) return null;
   
   if (message.type === 'interactive') {
-    if (message.interactive?.button_reply) return message.interactive.button_reply.title;
-    if (message.interactive?.list_reply) return message.interactive.list_reply.title;
+    if (message.interactive?.button_reply) return message.interactive.button_reply.id;
+    if (message.interactive?.list_reply) return message.interactive.list_reply.id;
   }
   if (message.type === 'text') return message.text?.body || null;
   if (message.type === 'audio') return '[voice]';
@@ -123,6 +124,25 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
 // Cron endpoint for appointment reminders
 fastify.post('/cron/reminders', async (request, reply) => {
   await handleReminderCron(request, reply);
+});
+
+// Shopify orders/paid webhook
+fastify.post('/webhook/shopify', async (request, reply) => {
+  const rawBody = (request as any).rawBody as string;
+  const hmacHeader = request.headers['x-shopify-hmac-sha256'] as string | undefined;
+  const shopDomain = request.headers['x-shopify-shop-domain'] as string | undefined;
+  const topic = request.headers['x-shopify-topic'] as string | undefined;
+
+  // Acknowledge immediately (Shopify requires fast response)
+  reply.code(200).send({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      await handleShopifyWebhook(request.body, rawBody, hmacHeader, shopDomain, topic);
+    } catch (error) {
+      console.error('Shopify webhook error:', error);
+    }
+  });
 });
 
 const start = async () => {
