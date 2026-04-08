@@ -39,6 +39,31 @@ export async function getClientByPhoneNumberId(phoneNumberId: string) {
   } catch (error) { console.error('❌ DB error:', error); return null; }
 }
 
+export async function getClientByShopifyDomain(domain: string) {
+  try {
+    // Match against settings->>'shopify_domain' or settings->'shopify'->>'domain'
+    const rows = await sql`
+      SELECT * FROM clients
+      WHERE active = true
+        AND (
+          settings->>'shopify_domain' = ${domain}
+          OR settings->'shopify'->>'domain' = ${domain}
+        )
+      LIMIT 1
+    `;
+    if (!rows[0]) return null;
+    const client = rows[0];
+    return {
+      ...client,
+      features: parseJSON(client.features, getDefaultFeatures()),
+      settings: parseJSON(client.settings, {}),
+      knowledge_base: parseJSON(client.knowledge_base, []),
+      questions: parseJSON(client.questions, []),
+      agent_phones: client.agent_phones || []
+    };
+  } catch (error) { console.error('❌ DB error:', error); return null; }
+}
+
 // Default features (all disabled - Basic tier)
 export function getDefaultFeatures() {
   return {
