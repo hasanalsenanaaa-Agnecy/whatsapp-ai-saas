@@ -451,6 +451,8 @@ async function handlePaymentConfirmation(
   // ====== PAYMENT SELF-REPORTED — pending webhook verification ======
   // Don't send receipt yet; let the Shopify orders/paid webhook confirm it.
   conv.data._paymentVerified = false;
+  // Timestamp is used by the guard above to detect repeat messages from the
+  // same customer while we're waiting for the webhook confirmation.
   conv.data._selfReportedAt = new Date().toISOString();
 
   const verifyingMsg = 'شكراً! نتحقق من الدفع وبنأكد طلبك تلقائي ✅';

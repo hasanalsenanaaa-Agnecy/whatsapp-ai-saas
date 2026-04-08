@@ -55,16 +55,26 @@ function verifyShopifyHmac(rawBody: string, hmacHeader: string, secret: string):
 
 // ============================================================
 // PHONE NORMALISATION
-// Strip non-digits; ensure leading country code (add 965 for Kuwait if short)
+// Strips non-digit characters (including leading '+') so the
+// result can be compared with WhatsApp's E.164 phone values
+// (e.g. "96512345678").
+// NOTE: Shopify phones in international format (+96512345678)
+// will normalise correctly. Local/short formats without a
+// country code prefix will NOT match — phones must be stored
+// in Shopify in international format for the lookup to succeed.
 // ============================================================
 
 function normalisePhone(raw: string | undefined): string | null {
   if (!raw) return null;
+  // Remove all non-digit characters (e.g. '+', '-', spaces, parentheses)
   const digits = raw.replace(/\D/g, '');
   if (!digits) return null;
-  // WhatsApp phones are stored as full E.164 without '+'
-  // e.g. "96512345678"
-  return digits.startsWith('0') ? digits.substring(1) : digits;
+  // Strip a leading '00' dialling prefix (e.g. "009651…" → "9651…")
+  if (digits.startsWith('00')) return digits.substring(2);
+  // Strip a leading '0' only if this looks like a very short number
+  // (≤9 digits after stripping), to avoid corrupting valid long codes
+  if (digits.startsWith('0') && digits.length <= 10) return digits.substring(1);
+  return digits;
 }
 
 // ============================================================
