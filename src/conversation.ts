@@ -33,6 +33,7 @@ import {
   isAIConversationAvailable
 } from './services/ai-conversation.js';
 import { pushToBookingAPI } from './services/bookingWebhook.js';
+import { handleShopifyAgent } from './services/shopify-agent.js';
 
 // ============================================================
 // TYPES
@@ -44,7 +45,7 @@ interface ConversationState {
   messages: { role: string; content: string }[];
   state: 'welcome' | 'questions' | 'appointment_date' | 'appointment_time' | 'completed' | 'chat'
        | 'shopify_browse' | 'shopify_search' | 'shopify_product' | 'shopify_cart' | 'shopify_confirmed'
-       | 'ai_conversation';
+       | 'ai_conversation' | 'shopify_agent';
   step: number;
   data: Record<string, any>;
   createdAt: string;
@@ -208,6 +209,15 @@ export async function handleIncomingMessage(
   // ============================================================
   // STATE MACHINE
   // ============================================================
+
+  // SHOPIFY AGENT MODE — full e-commerce flow
+  const hasShopifyConfig = client.settings?.shopify_domain || client.settings?.shopify?.domain;
+  if (hasShopifyConfig && (conv.state === 'welcome' || conv.state === 'shopify_agent')) {
+    conv.state = 'shopify_agent';
+    await handleShopifyAgent(client, conv, message, accessToken);
+    await saveConversation(conv);
+    return;
+  }
 
   // AI CONVERSATION MODE — skip rigid flow entirely
   if (features.ai_conversation && isAIConversationAvailable()) {
