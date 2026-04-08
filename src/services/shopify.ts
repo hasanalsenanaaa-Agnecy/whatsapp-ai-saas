@@ -23,6 +23,7 @@ export interface ShopifyVariant {
 export interface ShopifyCheckout {
   checkoutUrl: string;
   totalPrice: string;
+  currency: string;
 }
 
 // ============================================================
@@ -118,16 +119,20 @@ const PRODUCT_BY_ID_QUERY = `
   }
 `;
 
-const CREATE_CHECKOUT_MUTATION = `
-  mutation createCheckout($variantId: ID!, $quantity: Int!) {
-    checkoutCreate(input: {
-      lineItems: [{ variantId: $variantId, quantity: $quantity }]
+const CREATE_CART_MUTATION = `
+  mutation createCart($variantId: ID!, $quantity: Int!) {
+    cartCreate(input: {
+      lines: [{ merchandiseId: $variantId, quantity: $quantity }]
     }) {
-      checkout {
-        webUrl
-        totalPriceV2 { amount currencyCode }
+      cart {
+        id
+        checkoutUrl
+        totalQuantity
+        cost {
+          totalAmount { amount currencyCode }
+        }
       }
-      checkoutUserErrors {
+      userErrors {
         field
         message
       }
@@ -141,18 +146,24 @@ const CREATE_CHECKOUT_MUTATION = `
 
 async function shopifyGraphQL(
   shopifyDomain: string,
-  storefrontToken: string,
+  storefrontToken: string | undefined,
   query: string,
   variables: Record<string, unknown>
 ): Promise<unknown> {
   const url = `https://${shopifyDomain}/api/2026-04/graphql.json`;
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+
+  // Token-based auth if token provided; otherwise use tokenless access
+  if (storefrontToken) {
+    headers['X-Shopify-Storefront-Access-Token'] = storefrontToken;
+  }
+
   const response = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Storefront-Access-Token': storefrontToken
-    },
+    headers,
     body: JSON.stringify({ query, variables })
   });
 
@@ -196,11 +207,19 @@ function parseProduct(node: Record<string, unknown>): ShopifyProduct {
   };
 }
 
-/** Format a price amount as a locale-formatted number (no currency symbol — templates add "ريال") */
-export function formatPriceSAR(amount: string | number): string {
+/** Format a price amount as a locale-formatted number */
+export function formatPrice(amount: string | number, currency?: string): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
   if (isNaN(num)) return '0';
-  return num.toLocaleString('ar-SA', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  const formatted = num.toLocaleString('ar-SA', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  if (!currency) return formatted;
+  const symbols: Record<string, string> = { KWD: 'د.ك', SAR: 'ريال', AED: 'د.إ', USD: '$' };
+  return `${formatted} ${symbols[currency] ?? currency}`;
+}
+
+/** @deprecated Use formatPrice instead */
+export function formatPriceSAR(amount: string | number): string {
+  return formatPrice(amount);
 }
 
 // ============================================================
@@ -212,7 +231,7 @@ export function formatPriceSAR(amount: string | number): string {
  */
 export async function fetchProducts(
   shopifyDomain: string,
-  storefrontToken: string,
+  storefrontToken?: string,
   limit = 20
 ): Promise<ShopifyProduct[]> {
   try {
@@ -231,7 +250,7 @@ export async function fetchProducts(
  */
 export async function searchProducts(
   shopifyDomain: string,
-  storefrontToken: string,
+  storefrontToken: string | undefined,
   query: string,
   limit = 10
 ): Promise<ShopifyProduct[]> {
@@ -251,7 +270,7 @@ export async function searchProducts(
  */
 export async function getProductById(
   shopifyDomain: string,
-  storefrontToken: string,
+  storefrontToken: string | undefined,
   productId: string
 ): Promise<ShopifyProduct | null> {
   try {
@@ -267,34 +286,35 @@ export async function getProductById(
 }
 
 /**
- * Create a Shopify checkout (returns a payment URL)
+ * Create a Shopify cart and return a checkout URL (modern Cart API)
  */
 export async function createCheckout(
   shopifyDomain: string,
-  storefrontToken: string,
+  storefrontToken: string | undefined,
   variantId: string,
   quantity = 1
 ): Promise<ShopifyCheckout | null> {
   try {
-    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, CREATE_CHECKOUT_MUTATION, { variantId, quantity }) as {
-      checkoutCreate: {
-        checkout: { webUrl: string; totalPriceV2: { amount: string } } | null;
-        checkoutUserErrors: { field: string; message: string }[];
+    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, CREATE_CART_MUTATION, { variantId, quantity }) as {
+      cartCreate: {
+        cart: { id: string; checkoutUrl: string; cost: { totalAmount: { amount: string; currencyCode: string } } } | null;
+        userErrors: { field: string; message: string }[];
       };
     };
 
-    const result = data.checkoutCreate;
+    const result = data.cartCreate;
 
-    if (result.checkoutUserErrors.length > 0) {
-      console.error('❌ Shopify checkout errors:', result.checkoutUserErrors);
+    if (result.userErrors.length > 0) {
+      console.error('❌ Shopify cart errors:', result.userErrors);
       return null;
     }
 
-    if (!result.checkout) return null;
+    if (!result.cart) return null;
 
     return {
-      checkoutUrl: result.checkout.webUrl,
-      totalPrice: parseFloat(result.checkout.totalPriceV2.amount).toFixed(2)
+      checkoutUrl: result.cart.checkoutUrl,
+      totalPrice: parseFloat(result.cart.cost.totalAmount.amount).toFixed(2),
+      currency: result.cart.cost.totalAmount.currencyCode
     };
   } catch (error) {
     console.error('❌ Shopify createCheckout error:', error);

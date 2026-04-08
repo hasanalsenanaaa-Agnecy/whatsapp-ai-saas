@@ -32,6 +32,7 @@ import {
   getAIResponse,
   isAIConversationAvailable
 } from './services/ai-conversation.js';
+import { pushToBookingAPI } from './services/bookingWebhook.js';
 
 // ============================================================
 // TYPES
@@ -585,7 +586,7 @@ async function handleAIConversation(
     return;
   }
 
-  // Handle COMPLETE — save lead + notify agent, then STOP
+  // Handle COMPLETE — save lead + notify agent + push booking, then STOP
   if (parsed.complete) {
     // Send final message before completing
     if (parsed.text) {
@@ -598,6 +599,13 @@ async function handleAIConversation(
       ...client.settings?.appointment
     };
     await completeLead(client, conv, defaults, features, appointmentSettings, accessToken);
+
+    // Push to external booking API if configured
+    if (client.settings?.booking_api?.url) {
+      const ok = await pushToBookingAPI(client, conv);
+      console.log(ok ? '✅ Booking pushed to API' : '⚠️ Booking API push failed');
+    }
+
     conv.state = 'completed';
     return;
   }
