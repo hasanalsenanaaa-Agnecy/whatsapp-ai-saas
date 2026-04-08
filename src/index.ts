@@ -43,8 +43,8 @@ function extractMessageText(payload: any): string | null {
   if (!message) return null;
   
   if (message.type === 'interactive') {
-    if (message.interactive?.button_reply) return message.interactive.button_reply.id;
-    if (message.interactive?.list_reply) return message.interactive.list_reply.id;
+    if (message.interactive?.button_reply) return message.interactive.button_reply.id || message.interactive.button_reply.title || null;
+    if (message.interactive?.list_reply) return message.interactive.list_reply.id || message.interactive.list_reply.title || null;
   }
   if (message.type === 'text') return message.text?.body || null;
   if (message.type === 'audio') return '[voice]';
