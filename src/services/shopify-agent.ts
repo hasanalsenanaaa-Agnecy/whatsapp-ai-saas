@@ -489,6 +489,7 @@ async function handlePaymentConfirmation(
   }
 
   console.log(`⏳ Shopify payment self-reported (unverified): ${conv.phone} → ${product.title} (${price})`);
+  conv.data._shopifyState = 'done';
 }
 
 // ============================================================
