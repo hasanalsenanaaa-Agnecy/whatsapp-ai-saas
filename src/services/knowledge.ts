@@ -27,14 +27,16 @@ export interface ConversationMessage {
 }
 
 // Gulf Arabic system prompt - concise and natural
-const SYSTEM_PROMPT = `أنت مساعد ذكي لـ {businessName} في السعودية.
+const SYSTEM_PROMPT = `أنت مساعد لـ {businessName}.
 
 قواعد مهمة:
 1. رد بالعربي السعودي (اللهجة الخليجية) - قصير ومباشر
-2. أجب فقط من المعلومات المتوفرة - لا تخترع
-3. لو ما تعرف، قل "ما عندي هالمعلومة، بس خليني أساعدك بطريقة ثانية"
+2. أجب فقط من المعلومات المتوفرة أدناه - لا تخترع ولا تضيف معلومات من عندك
+3. لو ما تعرف، قل "ما عندي هالمعلومة"
 4. ردودك قصيرة - جملة أو جملتين كافي
-5. كن ودود ومحترف
+5. لا تستخدم إيموجي نهائياً
+6. لا تكرر نفس الجواب بصيغة مختلفة - أعطِ جواب واحد واضح
+7. لا ترتب المنتجات حسب الأفضلية إلا إذا موجود في المعلومات - اذكرها فقط
 
 معلومات العمل:
 {knowledgeBase}
@@ -170,24 +172,35 @@ export function detectHandoverIntent(message: string): boolean {
  * Check if message looks like a question (vs expected flow input)
  */
 export function looksLikeQuestion(message: string): boolean {
-  const questionIndicators = [
-    // Question marks
-    '?', '؟',
-    // Arabic question words
-    'كم', 'كيف', 'متى', 'وين', 'ليش', 'ليه', 'شو', 'وش', 'هل', 'ايش', 'إيش', 'من',
-    // Common question topics
-    'سعر', 'اسعار', 'أسعار', 'تكلفة', 'موقع', 'عنوان', 'رقم', 'تواصل',
-    'مواعيد', 'دوام', 'ساعات', 'يوم', 'متاح', 'فاضي',
-    // Question patterns
-    'عندكم', 'عندك', 'فيه', 'في', 'ممكن', 'تقدر', 'تقدرون'
-  ];
-
   const lowerMessage = message.toLowerCase().trim();
-  
-  // Must be longer than 3 chars to be a question
-  if (lowerMessage.length < 4) return false;
-  
-  return questionIndicators.some(q => lowerMessage.includes(q));
+
+  // Too short to be a real question
+  if (lowerMessage.length < 6) return false;
+
+  // Explicit question marks — always a question
+  if (lowerMessage.includes('?') || lowerMessage.includes('؟')) return true;
+
+  // Strong question words — high confidence
+  const strongIndicators = [
+    'كم', 'كيف', 'متى', 'وين', 'ليش', 'ليه', 'شو', 'وش', 'ايش', 'إيش',
+    'سعر', 'اسعار', 'أسعار', 'تكلفة',
+    'عندكم', 'عندك', 'فيه',
+    'تقدر', 'تقدرون',
+    'احسن', 'أحسن', 'افضل', 'أفضل', 'الفرق'
+  ];
+  if (strongIndicators.some(q => lowerMessage.includes(q))) return true;
+
+  // Weak indicators — only match if message is long enough to be a real question
+  if (lowerMessage.length >= 10) {
+    const weakIndicators = [
+      'هل', 'موقع', 'عنوان', 'رقم', 'تواصل',
+      'مواعيد', 'دوام', 'ساعات', 'متاح', 'فاضي',
+      'ممكن', 'توصيل', 'شحن'
+    ];
+    if (weakIndicators.some(q => lowerMessage.includes(q))) return true;
+  }
+
+  return false;
 }
 
 /**
