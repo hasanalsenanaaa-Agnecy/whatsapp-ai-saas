@@ -146,12 +146,14 @@ export async function handleShopifyWebhook(
     return;
   }
 
-  // Accept awaiting_payment state OR done-but-unverified state
-  const isAwaitingPayment = conv.data._shopifyState === 'awaiting_payment';
-  const isDoneUnverified = conv.data._shopifyState === 'done' && conv.data._paymentVerified === false;
+  // Accept awaiting_payment, order_complete, or done-but-unverified state
+  const shopifyState = conv.data._shopifyState;
+  const isPaymentPending = shopifyState === 'awaiting_payment'
+    || shopifyState === 'order_complete'
+    || (shopifyState === 'done' && conv.data._paymentVerified === false);
 
-  if (!isAwaitingPayment && !isDoneUnverified) {
-    console.log(`Shopify webhook: conversation for ${customerPhone} not in payment state (state=${conv.data._shopifyState})`);
+  if (!isPaymentPending) {
+    console.log(`Shopify webhook: conversation for ${customerPhone} not in payment state (state=${shopifyState})`);
     return;
   }
 
@@ -166,27 +168,54 @@ export async function handleShopifyWebhook(
   const currency = client.settings?.currency || order.currency || 'KWD';
   const ownerPhones: string[] = client.agent_phones || [];
 
-  const firstItem = order.line_items?.[0];
-  const productTitle = firstItem?.title || conv.data._selectedProduct?.title || '-';
-  const variantTitle = firstItem?.variant_title && firstItem.variant_title !== 'Default Title'
-    ? firstItem.variant_title : (conv.data._selectedVariantTitle || '');
+  // Build product info from order line items or cart data
+  const cart: { productTitle: string; variantTitle: string }[] = conv.data._cart || [];
+  const lineItems = order.line_items || [];
+  let productsText = '';
+  if (lineItems.length > 0) {
+    productsText = lineItems.map(li => {
+      let line = `📦 ${li.title || '-'}`;
+      if (li.variant_title && li.variant_title !== 'Default Title') line += ` (${li.variant_title})`;
+      if (li.quantity && li.quantity > 1) line += ` x${li.quantity}`;
+      return line;
+    }).join('\n');
+  } else if (cart.length > 0) {
+    productsText = cart.map(i => {
+      let line = `📦 ${i.productTitle}`;
+      if (i.variantTitle && i.variantTitle !== 'Default Title') line += ` (${i.variantTitle})`;
+      return line;
+    }).join('\n');
+  } else {
+    const firstItem = lineItems[0];
+    productsText = `📦 ${firstItem?.title || conv.data._selectedProduct?.title || '-'}`;
+  }
+
   const totalPrice = order.total_price || conv.data._checkout?.totalPrice || '0';
   const orderNumber = order.order_number ? `#${order.order_number}` : '';
 
   // Update conversation
   conv.data._paymentVerified = true;
-  conv.data._shopifyState = 'done';
   if (customerName) conv.data.name = customerName;
   if (orderNumber) conv.data._orderNumber = orderNumber;
+
+  // State transition depends on current state
+  const wasAwaitingPayment = shopifyState === 'awaiting_payment';
+  if (wasAwaitingPayment) {
+    // Customer hasn't confirmed yet but payment went through — move to order_complete
+    conv.data._shopifyState = 'order_complete';
+  }
+  // If already order_complete or done, keep the state
   await saveConversation(conv);
 
-  // Send receipt to customer
   const priceFormatted = formatPrice(totalPrice, currency);
-  const receipt = `✅ *تم تأكيد طلبك بنجاح!*
+
+  if (wasAwaitingPayment) {
+    // Full receipt — customer hasn't seen the completion message yet
+    const receipt = `✅ *تم تأكيد الدفع وطلبك قيد التجهيز!*
 
 🧾 *إيصال الطلب:*
 ━━━━━━━━━━━━━━━
-📦 المنتج: ${productTitle}${variantTitle ? `\n📏 النوع: ${variantTitle}` : ''}
+${productsText}
 💰 المبلغ: ${priceFormatted}${orderNumber ? `\n🔖 رقم الطلب: ${orderNumber}` : ''}
 📱 رقمك: ${conv.phone}
 📅 التاريخ: ${new Date().toLocaleDateString('ar-SA', { timeZone: 'Asia/Riyadh' })}
@@ -195,33 +224,38 @@ export async function handleShopifyWebhook(
 شكراً لتسوقك من *${storeName}*! 🙏❤️
 راح نتواصل معك بخصوص التوصيل قريباً 📦`;
 
-  await sendWhatsAppMessage(conv.phone, receipt, accessToken, client.phone_number_id);
+    await sendWhatsAppMessage(conv.phone, receipt, accessToken, client.phone_number_id);
+    await new Promise(r => setTimeout(r, 400));
 
-  await new Promise(r => setTimeout(r, 400));
-
-  await sendWhatsAppButtons(
-    conv.phone,
-    'تبي تطلب شيء ثاني؟ 😊',
-    [
-      { id: 'new_order', title: 'طلب جديد 🛍️' },
-      { id: 'talk_agent', title: 'تكلم مع موظف' }
-    ],
-    accessToken,
-    client.phone_number_id
-  );
+    await sendWhatsAppButtons(
+      conv.phone,
+      'تبي تطلب شيء ثاني؟ 😊',
+      [
+        { id: 'new_order', title: 'طلب جديد 🛍️' },
+        { id: 'no_thanks', title: 'لا شكراً 👋' }
+      ],
+      accessToken,
+      client.phone_number_id
+    );
+  } else {
+    // Short confirmation — customer already got the completion message
+    await sendWhatsAppMessage(conv.phone, 'تم تأكيد الدفع ✅ طلبك قيد التجهيز', accessToken, client.phone_number_id);
+  }
 
   // Notify owner — verified payment
   const time = new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' });
   const displayName = conv.data.name || conv.phone;
+  const history = conv.data._orderHistory || [];
+  const historyText = history.length > 0 ? `\n📜 طلبات سابقة: ${history.length}` : '';
   const ownerMsg = `✅ *طلب مدفوع (تم التحقق) — ${storeName}*
 
 👤 العميل: ${displayName}
 📱 ${conv.phone}
 💬 wa.me/${conv.phone.replace('+', '')}
 
-📦 المنتج: ${productTitle}${variantTitle ? `\n📏 النوع: ${variantTitle}` : ''}
+${productsText}
 💰 المبلغ: ${priceFormatted}${orderNumber ? `\n🔖 رقم الطلب: ${orderNumber}` : ''}
-🔗 ${conv.data._checkout?.url || '-'}
+🔗 ${conv.data._checkout?.url || '-'}${historyText}
 
 ⏰ ${time}`;
 
@@ -233,7 +267,7 @@ export async function handleShopifyWebhook(
     }
   }
 
-  // Save / update lead
+  // Save / update lead with cart data
   try {
     await createLead({
       clientId: client.id,
@@ -241,15 +275,15 @@ export async function handleShopifyWebhook(
       name: conv.data.name || conv.phone,
       email: order.customer?.email || '',
       data: {
-        product: productTitle,
-        variant: variantTitle,
-        price: totalPrice,
+        cart: cart.length > 0 ? cart : lineItems.map((li: any) => ({ product: li.title, variant: li.variant_title, price: li.price })),
+        totalPrice,
         currency,
         checkoutUrl: conv.data._checkout?.url || '',
         orderNumber,
         paymentConfirmed: true,
         paymentVerified: true,
-        orderDate: new Date().toISOString()
+        orderDate: new Date().toISOString(),
+        orderHistory: conv.data._orderHistory || []
       },
       score: 'hot'
     });
@@ -257,5 +291,5 @@ export async function handleShopifyWebhook(
     console.error('Shopify webhook: lead save error:', err);
   }
 
-  console.log(`✅ Shopify webhook: payment verified for ${conv.phone} → ${productTitle} (${priceFormatted})`);
+  console.log(`✅ Shopify webhook: payment verified for ${conv.phone} → ${orderNumber || 'order'} (${totalPrice} ${currency})`);
 }

@@ -140,6 +140,27 @@ const CREATE_CART_MUTATION = `
   }
 `;
 
+const CREATE_MULTI_CART_MUTATION = `
+  mutation createMultiCart($lines: [CartLineInput!]!) {
+    cartCreate(input: {
+      lines: $lines
+    }) {
+      cart {
+        id
+        checkoutUrl
+        totalQuantity
+        cost {
+          totalAmount { amount currencyCode }
+        }
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 // ============================================================
 // HELPER FUNCTIONS
 // ============================================================
@@ -318,6 +339,45 @@ export async function createCheckout(
     };
   } catch (error) {
     console.error('❌ Shopify createCheckout error:', error);
+    return null;
+  }
+}
+
+/**
+ * Create a multi-item Shopify cart and return a checkout URL
+ */
+export async function createMultiItemCheckout(
+  shopifyDomain: string,
+  storefrontToken: string | undefined,
+  items: { variantId: string; quantity: number }[]
+): Promise<ShopifyCheckout | null> {
+  try {
+    const lines = items.map(item => ({
+      merchandiseId: item.variantId,
+      quantity: item.quantity
+    }));
+
+    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, CREATE_MULTI_CART_MUTATION, { lines }) as {
+      cartCreate: {
+        cart: { id: string; checkoutUrl: string; cost: { totalAmount: { amount: string; currencyCode: string } } } | null;
+        userErrors: { field: string; message: string }[];
+      };
+    };
+
+    const result = data.cartCreate;
+    if (result.userErrors.length > 0) {
+      console.error('❌ Shopify multi-cart errors:', result.userErrors);
+      return null;
+    }
+    if (!result.cart) return null;
+
+    return {
+      checkoutUrl: result.cart.checkoutUrl,
+      totalPrice: parseFloat(result.cart.cost.totalAmount.amount).toFixed(2),
+      currency: result.cart.cost.totalAmount.currencyCode
+    };
+  } catch (error) {
+    console.error('❌ Shopify createMultiItemCheckout error:', error);
     return null;
   }
 }
