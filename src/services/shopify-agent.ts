@@ -1,13 +1,14 @@
 // ============================================================
 // SHOPIFY AI AGENT
-// Full e-commerce WhatsApp agent:
-//   Welcome → Browse choice → (Images?) → Catalog → Selection → Payment link → Receipt
+// Full e-commerce WhatsApp agent with multi-item cart:
+//   Welcome → Browse → Catalog → Product → Cart → Payment → Completion
 // Works with tokenless Shopify Storefront API.
 // ============================================================
 
 import {
   fetchProducts,
   createCheckout,
+  createMultiItemCheckout,
   formatPrice,
   type ShopifyProduct
 } from './shopify.js';
@@ -18,6 +19,8 @@ import {
   sendWhatsAppImage
 } from './whatsapp.js';
 import { createLead } from './database.js';
+import { looksLikeQuestion, generateKnowledgeResponse, isAIAvailable } from './knowledge.js';
+import { smartTitle, truncate, normalizeArabicNumbers } from '../utils/buttons.js';
 
 // ============================================================
 // TYPES
@@ -42,6 +45,14 @@ interface ConversationState {
   updatedAt: string;
 }
 
+interface CartItem {
+  productTitle: string;
+  productId: string;
+  variantId: string;
+  variantTitle: string;
+  price: string;
+}
+
 // ============================================================
 // MAIN HANDLER
 // ============================================================
@@ -58,7 +69,20 @@ export async function handleShopifyAgent(
     return;
   }
 
+  // Initialize cart and order history for new/existing conversations
+  if (!conv.data._cart) conv.data._cart = [];
+  if (!conv.data._orderHistory) conv.data._orderHistory = [];
+
   const shopifyState = conv.data._shopifyState || 'welcome';
+
+  // Smart AI answering — intercept product questions at any state (except welcome)
+  if (shopifyState !== 'welcome') {
+    const isButtonId = /^(pick_\d+|var_\d+|show_images|pick_direct|order_yes|order_back|paid_yes|paid_help|new_order|talk_agent|add_more|checkout_now|no_thanks|remove_item|remove_\d+)$/.test(message.trim());
+    if (!isButtonId && looksLikeQuestion(message)) {
+      const answered = await handleProductQuestion(client, conv, config, message, accessToken);
+      if (answered) return;
+    }
+  }
 
   switch (shopifyState) {
     case 'welcome':
@@ -76,11 +100,20 @@ export async function handleShopifyAgent(
     case 'confirm_order':
       await handleOrderConfirmation(client, conv, config, message, accessToken);
       break;
+    case 'cart_add':
+      await handleCartAdd(client, conv, config, message, accessToken);
+      break;
+    case 'cart_remove':
+      await handleCartRemove(client, conv, config, message, accessToken);
+      break;
     case 'awaiting_payment':
       await handlePaymentConfirmation(client, conv, config, message, accessToken);
       break;
+    case 'order_complete':
+      await handleOrderComplete(client, conv, config, message, accessToken);
+      break;
     case 'done':
-      await handlePostOrder(client, conv, config, message, accessToken);
+      await handleDone(client, conv, config, message, accessToken);
       break;
     default:
       await handleWelcome(client, conv, config, message, accessToken);
@@ -239,10 +272,10 @@ async function handleCatalogSelection(
   // Check if product has multiple variants
   const availableVariants = selected.variants.filter(v => v.available);
   if (availableVariants.length > 1 && availableVariants.some(v => v.title !== 'Default Title')) {
-    // Show variant selection
+    // Show variant selection (smartVariantTitle preserves differentiating info)
     const variantList = availableVariants.slice(0, 3).map((v, i) => ({
       id: `var_${i}`,
-      title: truncate(`${v.title} - ${formatPrice(v.price, config.currency)}`, 20)
+      title: smartVariantTitle(v.title, v.price, config.currency, 20)
     }));
     await sendWhatsAppButtons(
       conv.phone,
@@ -312,7 +345,7 @@ async function handleProductAction(
 }
 
 // ============================================================
-// STATE: CONFIRM_ORDER — Customer confirms, we create cart + send payment link
+// STATE: CONFIRM_ORDER — Customer confirms, add to cart
 // ============================================================
 
 async function handleOrderConfirmation(
@@ -327,12 +360,11 @@ async function handleOrderConfirmation(
   // Go back to catalog
   if (lower === 'order_back' || lower.includes('ارجع') || lower.includes('رجوع')) {
     conv.data._shopifyState = 'catalog';
-    // Re-show product list
     await showProductCatalog(client, conv, config, accessToken, 'تفضل اختر منتج ثاني 👇');
     return;
   }
 
-  // Confirm order
+  // Confirm — add to cart
   const isYes = lower === 'order_yes' || lower.includes('نعم') || lower.includes('اطلب')
     || lower.includes('أطلب') || lower.includes('تمام') || lower.includes('زين')
     || lower.includes('اوك') || lower.includes('أوك') || lower.includes('ماشي');
@@ -351,55 +383,122 @@ async function handleOrderConfirmation(
     return;
   }
 
-  // Create Shopify cart → get payment link
-  const variantId = conv.data._selectedVariantId;
-  if (!variantId) {
+  // Add selected product to cart
+  const product: ShopifyProduct = conv.data._selectedProduct;
+  if (!product || !conv.data._selectedVariantId) {
     await sendWhatsAppMessage(conv.phone, 'صار خطأ، خلني أعرض لك المنتجات من جديد.', accessToken, client.phone_number_id);
     conv.data._shopifyState = 'welcome';
     return;
   }
 
-  await sendWhatsAppMessage(conv.phone, 'جاري تجهيز طلبك... ⏳', accessToken, client.phone_number_id);
+  const variant = product.variants.find((v: any) => v.id === conv.data._selectedVariantId);
+  conv.data._cart.push({
+    productTitle: product.title,
+    productId: product.id,
+    variantId: conv.data._selectedVariantId,
+    variantTitle: conv.data._selectedVariantTitle || 'Default Title',
+    price: variant?.price || product.priceMin
+  });
 
-  const checkout = await createCheckout(config.domain, config.storefrontToken, variantId, 1);
+  // Show cart and ask if they want more
+  conv.data._shopifyState = 'cart_add';
+  await showCartAndAskMore(client, conv, config, accessToken);
+}
 
-  if (!checkout) {
-    await sendWhatsAppMessage(conv.phone, 'عذراً، صار خطأ في إنشاء الطلب. جرب مرة ثانية.', accessToken, client.phone_number_id);
+// ============================================================
+// STATE: CART_ADD — Add more items or checkout
+// ============================================================
+
+async function handleCartAdd(
+  client: any,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  message: string,
+  accessToken: string
+): Promise<void> {
+  const lower = message.toLowerCase().trim();
+
+  // Add more products
+  if (lower === 'add_more' || lower.includes('أضف') || lower.includes('ضيف') || lower.includes('زيد')) {
+    conv.data._shopifyState = 'catalog';
+    await showProductCatalog(client, conv, config, accessToken, 'تفضل اختر منتج ثاني 👇');
     return;
   }
 
-  // Save checkout info
-  const product: ShopifyProduct = conv.data._selectedProduct;
-  conv.data._checkout = {
-    url: checkout.checkoutUrl,
-    totalPrice: checkout.totalPrice,
-    currency: checkout.currency
-  };
+  // Remove a product
+  if (lower === 'remove_item' || lower.includes('حذف') || lower.includes('شيل') || lower.includes('أزل')) {
+    conv.data._shopifyState = 'cart_remove';
+    await showCartForRemoval(client, conv, config, accessToken);
+    return;
+  }
 
-  // Send payment link to customer
-  const price = formatPrice(checkout.totalPrice, checkout.currency);
-  const paymentMsg = `🛒 *تفاصيل طلبك:*\n\n📦 ${product.title}\n💰 ${price}\n\n💳 *ادفع من هنا:*\n${checkout.checkoutUrl}\n\nبعد ما تدفع، اضغط "تم الدفع" 👇`;
-  await sendWhatsAppMessage(conv.phone, paymentMsg, accessToken, client.phone_number_id);
-  conv.messages.push({ role: 'assistant', content: paymentMsg });
+  // Checkout
+  if (lower === 'checkout_now' || lower.includes('اطلب') || lower.includes('ادفع')
+    || lower.includes('تمام') || lower.includes('ماشي') || lower.includes('اوك')) {
+    await processCheckout(client, conv, config, accessToken);
+    return;
+  }
 
-  await sleep(500);
+  // Didn't understand — re-show options
+  await showCartAndAskMore(client, conv, config, accessToken);
+}
 
-  await sendWhatsAppButtons(
-    conv.phone,
-    'هل دفعت؟ 💳',
-    [
-      { id: 'paid_yes', title: 'تم الدفع ✅' },
-      { id: 'paid_help', title: 'أحتاج مساعدة' }
-    ],
-    accessToken,
-    client.phone_number_id
-  );
+// ============================================================
+// STATE: CART_REMOVE — Remove an item from cart
+// ============================================================
 
-  conv.data._shopifyState = 'awaiting_payment';
+async function handleCartRemove(
+  client: any,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  message: string,
+  accessToken: string
+): Promise<void> {
+  const cart: CartItem[] = conv.data._cart || [];
+  const lower = message.toLowerCase().trim();
+
+  // Match by remove_N button ID
+  const removeMatch = lower.match(/^remove_(\d+)$/);
+  let idx = -1;
+  if (removeMatch) {
+    idx = parseInt(removeMatch[1]!);
+  } else {
+    // Try number match
+    const num = parseInt(normalizeArabicNumbers(lower));
+    if (num >= 1 && num <= cart.length) idx = num - 1;
+  }
+
+  if (idx >= 0 && idx < cart.length) {
+    const removed = cart.splice(idx, 1)[0]!;
+    conv.data._cart = cart;
+    await sendWhatsAppMessage(conv.phone, `تم حذف *${removed.productTitle}* من السلة ❌`, accessToken, client.phone_number_id);
+
+    if (cart.length === 0) {
+      conv.data._shopifyState = 'catalog';
+      await showProductCatalog(client, conv, config, accessToken, 'السلة فاضية. تفضل اختر منتج 👇');
+      return;
+    }
+
+    // Back to cart_add with updated cart
+    conv.data._shopifyState = 'cart_add';
+    await showCartAndAskMore(client, conv, config, accessToken);
+    return;
+  }
+
+  // Cancel removal
+  if (lower.includes('لا') || lower.includes('رجوع') || lower.includes('كنسل')) {
+    conv.data._shopifyState = 'cart_add';
+    await showCartAndAskMore(client, conv, config, accessToken);
+    return;
+  }
+
+  // Re-show removal options
+  await showCartForRemoval(client, conv, config, accessToken);
 }
 
 // ============================================================
 // STATE: AWAITING_PAYMENT — Customer confirms payment
+// FIX: No verification loop — immediately transitions to order_complete
 // ============================================================
 
 async function handlePaymentConfirmation(
@@ -417,12 +516,6 @@ async function handlePaymentConfirmation(
     await sendWhatsAppMessage(conv.phone, helpMsg, accessToken, client.phone_number_id);
     conv.messages.push({ role: 'assistant', content: helpMsg });
     await notifyOwner(client, conv, config, 'help', accessToken);
-    return;
-  }
-
-  // Already self-reported — waiting for webhook confirmation
-  if (conv.data._selfReportedAt && conv.data._paymentVerified === false) {
-    await sendWhatsAppMessage(conv.phone, 'ما زلنا نتحقق من الدفع. بنأكد طلبك قريباً ✅', accessToken, client.phone_number_id);
     return;
   }
 
@@ -448,24 +541,16 @@ async function handlePaymentConfirmation(
     return;
   }
 
-  // ====== PAYMENT SELF-REPORTED — pending webhook verification ======
-  // Don't send receipt yet; let the Shopify orders/paid webhook confirm it.
-  conv.data._paymentVerified = false;
-  // Timestamp is used by the guard above to detect repeat messages from the
-  // same customer while we're waiting for the webhook confirmation.
-  conv.data._selfReportedAt = new Date().toISOString();
+  // ===== PAYMENT CONFIRMED — immediate transition, no verification loop =====
+  conv.data._paymentSelfReported = true;
+  conv.data._paymentReportedAt = new Date().toISOString();
 
-  const verifyingMsg = 'شكراً! نتحقق من الدفع وبنأكد طلبك تلقائي ✅';
-  await sendWhatsAppMessage(conv.phone, verifyingMsg, accessToken, client.phone_number_id);
-  conv.messages.push({ role: 'assistant', content: verifyingMsg });
+  // Notify agent
+  await notifyOwner(client, conv, config, 'paid', accessToken);
 
-  // Notify owner with unverified warning
-  await notifyOwner(client, conv, config, 'unverified', accessToken);
-
-  // Save lead with unverified flag so owner knows
-  const product: ShopifyProduct = conv.data._selectedProduct;
+  // Save lead
+  const cart: CartItem[] = conv.data._cart || [];
   const checkout = conv.data._checkout;
-  const price = formatPrice(checkout?.totalPrice || product.priceMin, checkout?.currency || config.currency);
   try {
     await createLead({
       clientId: client.id,
@@ -473,30 +558,56 @@ async function handlePaymentConfirmation(
       name: conv.data.name || conv.phone,
       email: '',
       data: {
-        product: product.title,
-        variant: conv.data._selectedVariantTitle || '',
-        price: checkout?.totalPrice || product.priceMin,
+        cart: cart.map(i => ({ product: i.productTitle, variant: i.variantTitle, price: i.price })),
+        totalPrice: checkout?.totalPrice,
         currency: checkout?.currency || config.currency,
         checkoutUrl: checkout?.url || '',
         paymentConfirmed: true,
-        paymentVerified: false,
-        orderDate: new Date().toISOString()
+        orderDate: new Date().toISOString(),
+        orderHistory: conv.data._orderHistory || []
       },
-      score: 'warm'
+      score: 'hot'
     });
   } catch (err) {
     console.error('❌ Lead save error:', err);
   }
 
-  console.log(`⏳ Shopify payment self-reported (unverified): ${conv.phone} → ${product.title} (${price})`);
-  conv.data._shopifyState = 'done';
+  // Show completion message with full cart summary
+  let confirmMsg = 'شكراً لك! طلبك قيد التجهيز 🎉\n\n';
+  if (cart.length > 0) {
+    confirmMsg += '📦 *طلبك:*\n';
+    for (const item of cart) {
+      confirmMsg += `• ${item.productTitle}`;
+      if (item.variantTitle && item.variantTitle !== 'Default Title') {
+        confirmMsg += ` (${item.variantTitle})`;
+      }
+      confirmMsg += ` — ${formatPrice(item.price, checkout?.currency || config.currency)}\n`;
+    }
+    const total = cart.reduce((sum: number, i: CartItem) => sum + parseFloat(i.price), 0);
+    confirmMsg += `\n💰 المجموع: ${formatPrice(total.toFixed(2), checkout?.currency || config.currency)}\n`;
+  }
+  confirmMsg += '\nتبي شي ثاني؟';
+
+  await sendWhatsAppButtons(
+    conv.phone,
+    confirmMsg,
+    [
+      { id: 'new_order', title: 'طلب جديد 🛍️' },
+      { id: 'no_thanks', title: 'لا شكراً 👋' }
+    ],
+    accessToken,
+    client.phone_number_id
+  );
+
+  conv.data._shopifyState = 'order_complete';
+  console.log(`✅ Shopify payment confirmed: ${conv.phone} → ${cart.length} items`);
 }
 
 // ============================================================
-// STATE: DONE — Post-order follow-ups
+// STATE: ORDER_COMPLETE — Order done, ask what next
 // ============================================================
 
-async function handlePostOrder(
+async function handleOrderComplete(
   client: any,
   conv: ConversationState,
   config: ShopifyAgentConfig,
@@ -505,16 +616,26 @@ async function handlePostOrder(
 ): Promise<void> {
   const lower = message.toLowerCase().trim();
 
-  // New order?
-  if (lower === 'new_order' || lower.includes('طلب جديد') || lower.includes('ابي اطلب') || lower.includes('أبي أطلب')
-    || lower.includes('تصفح') || lower.includes('من جديد')) {
+  // New order
+  if (lower === 'new_order' || lower.includes('طلب جديد') || lower.includes('ابي اطلب')
+    || lower.includes('أبي أطلب') || lower.includes('تصفح') || lower.includes('من جديد')) {
+    // Save current order to history before resetting
+    pushCurrentOrderToHistory(conv);
+    resetCurrentOrder(conv);
     conv.data._shopifyState = 'catalog';
-    // Reuse cached products — no re-fetching, no image flood
     await showProductCatalog(client, conv, config, accessToken, 'تفضل اختر منتجك 👇');
     return;
   }
 
-  // Cancel / problem → notify owner
+  // No thanks — goodbye
+  if (lower === 'no_thanks' || lower.includes('لا شكر') || lower.includes('باي')
+    || lower.includes('مع السلامة') || lower.includes('خلاص')) {
+    await sendWhatsAppMessage(conv.phone, 'شكراً لتسوقك! نتمنى نشوفك قريب 😊👋', accessToken, client.phone_number_id);
+    conv.data._shopifyState = 'done';
+    return;
+  }
+
+  // Urgent / agent requests
   const urgentKeywords = ['الغ', 'الغاء', 'ألغي', 'مشكلة', 'شكوى', 'وين طلبي', 'موظف', 'بشر'];
   if (lower === 'talk_agent' || urgentKeywords.some(k => lower.includes(k))) {
     await sendWhatsAppMessage(conv.phone, 'تم! فريقنا بيتواصل معك خلال دقائق. 🙏', accessToken, client.phone_number_id);
@@ -522,11 +643,54 @@ async function handlePostOrder(
     return;
   }
 
-  // Default: friendly response
-  const product = conv.data._selectedProduct;
+  // Default: re-show options
   await sendWhatsAppButtons(
     conv.phone,
-    `شكراً لك! 😊\nطلبك (${product?.title || 'المنتج'}) على طريقه.\n\nتبي شي ثاني؟`,
+    'تبي شي ثاني؟',
+    [
+      { id: 'new_order', title: 'طلب جديد 🛍️' },
+      { id: 'no_thanks', title: 'لا شكراً 👋' }
+    ],
+    accessToken,
+    client.phone_number_id
+  );
+}
+
+// ============================================================
+// STATE: DONE — Conversation finished, handle any follow-ups
+// ============================================================
+
+async function handleDone(
+  client: any,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  message: string,
+  accessToken: string
+): Promise<void> {
+  const lower = message.toLowerCase().trim();
+
+  // Start a new order
+  if (lower === 'new_order' || lower.includes('طلب جديد') || lower.includes('ابي اطلب')
+    || lower.includes('أبي أطلب') || lower.includes('تصفح')) {
+    pushCurrentOrderToHistory(conv);
+    resetCurrentOrder(conv);
+    conv.data._shopifyState = 'catalog';
+    await showProductCatalog(client, conv, config, accessToken, 'تفضل اختر منتجك 👇');
+    return;
+  }
+
+  // Agent request
+  const urgentKeywords = ['الغ', 'الغاء', 'مشكلة', 'شكوى', 'وين طلبي', 'موظف', 'بشر'];
+  if (lower === 'talk_agent' || urgentKeywords.some(k => lower.includes(k))) {
+    await sendWhatsAppMessage(conv.phone, 'تم! فريقنا بيتواصل معك خلال دقائق. 🙏', accessToken, client.phone_number_id);
+    await notifyOwner(client, conv, config, 'urgent', accessToken);
+    return;
+  }
+
+  // Default
+  await sendWhatsAppButtons(
+    conv.phone,
+    'أهلاً! كيف أقدر أساعدك؟ 😊',
     [
       { id: 'new_order', title: 'طلب جديد 🛍️' },
       { id: 'talk_agent', title: 'تكلم مع موظف' }
@@ -534,6 +698,50 @@ async function handlePostOrder(
     accessToken,
     client.phone_number_id
   );
+}
+
+// ============================================================
+// SMART AI ANSWERING — answer product questions using knowledge base
+// ============================================================
+
+async function handleProductQuestion(
+  client: any,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  message: string,
+  accessToken: string
+): Promise<boolean> {
+  if (!isAIAvailable()) return false;
+
+  // Build knowledge base from client data + product catalog
+  const clientKB = client.knowledge_base || [];
+  const products: ShopifyProduct[] = conv.data._products || [];
+  const productKB = products.map(p => ({
+    category: 'منتجات',
+    question: p.title,
+    answer: `${p.title} — السعر: ${formatPrice(p.priceMin, config.currency)}${p.description ? '. ' + p.description.substring(0, 200) : ''}`
+  }));
+  const augmentedKB = [...clientKB, ...productKB];
+
+  if (augmentedKB.length === 0) return false;
+
+  try {
+    const response = await generateKnowledgeResponse(
+      config.storeName,
+      augmentedKB,
+      conv.data,
+      conv.messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+      message
+    );
+
+    const answer = response.answer + '\n\nتبي تطلب؟ 😊';
+    await sendWhatsAppMessage(conv.phone, answer, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: answer });
+    return true;
+  } catch (error) {
+    console.error('❌ Product question AI error:', error);
+    return false;
+  }
 }
 
 // ============================================================
@@ -602,6 +810,198 @@ function matchVariant(message: string, variants: { id: string; title: string; pr
   return variants.find(v => v.title.toLowerCase().includes(lower)) || null;
 }
 
+// ============================================================
+// CART & ORDER HISTORY MANAGEMENT
+// ============================================================
+
+function pushCurrentOrderToHistory(conv: ConversationState): void {
+  const cart: CartItem[] = conv.data._cart || [];
+
+  // If no cart items but there's a selected product (backwards compat)
+  if (cart.length === 0 && conv.data._selectedProduct) {
+    cart.push({
+      productTitle: conv.data._selectedProduct.title,
+      productId: conv.data._selectedProduct.id,
+      variantId: conv.data._selectedVariantId || '',
+      variantTitle: conv.data._selectedVariantTitle || '',
+      price: conv.data._checkout?.totalPrice || conv.data._selectedProduct.priceMin
+    });
+  }
+
+  if (cart.length > 0) {
+    if (!conv.data._orderHistory) conv.data._orderHistory = [];
+    conv.data._orderHistory.push({
+      items: [...cart],
+      totalPrice: conv.data._checkout?.totalPrice || '',
+      paymentLink: conv.data._checkout?.url || '',
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
+function resetCurrentOrder(conv: ConversationState): void {
+  conv.data._cart = [];
+  delete conv.data._selectedProduct;
+  delete conv.data._selectedVariantId;
+  delete conv.data._selectedVariantTitle;
+  delete conv.data._checkout;
+  delete conv.data._paymentSelfReported;
+  delete conv.data._paymentReportedAt;
+  delete conv.data._paymentVerified;
+  delete conv.data._selfReportedAt;
+  // Preserve: _products, _orderHistory, name
+}
+
+async function showCartAndAskMore(
+  client: any,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  accessToken: string
+): Promise<void> {
+  const cart: CartItem[] = conv.data._cart || [];
+
+  let msg = '🛒 *سلة التسوق:*\n━━━━━━━━━━━━━━━\n';
+  let total = 0;
+  for (let i = 0; i < cart.length; i++) {
+    const item = cart[i]!;
+    const itemPrice = parseFloat(item.price);
+    total += itemPrice;
+    msg += `${i + 1}. ${item.productTitle}`;
+    if (item.variantTitle && item.variantTitle !== 'Default Title') {
+      msg += ` (${item.variantTitle})`;
+    }
+    msg += ` — ${formatPrice(item.price, config.currency)}\n`;
+  }
+  msg += `━━━━━━━━━━━━━━━\n💰 *المجموع: ${formatPrice(total.toFixed(2), config.currency)}*\n\nتبي تضيف منتج ثاني؟`;
+
+  await sendWhatsAppButtons(
+    conv.phone,
+    msg,
+    [
+      { id: 'add_more', title: 'أضف منتج ➕' },
+      { id: 'checkout_now', title: 'اطلب الآن 🛒' },
+      { id: 'remove_item', title: 'حذف منتج ❌' }
+    ],
+    accessToken,
+    client.phone_number_id
+  );
+}
+
+async function showCartForRemoval(
+  client: any,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  accessToken: string
+): Promise<void> {
+  const cart: CartItem[] = conv.data._cart || [];
+
+  if (cart.length === 0) {
+    conv.data._shopifyState = 'catalog';
+    await showProductCatalog(client, conv, config, accessToken, 'السلة فاضية. تفضل اختر منتج 👇');
+    return;
+  }
+
+  if (cart.length <= 3) {
+    await sendWhatsAppButtons(
+      conv.phone,
+      'أي منتج تبي تحذفه؟',
+      cart.map((item, i) => ({
+        id: `remove_${i}`,
+        title: truncate(item.productTitle, 20)
+      })),
+      accessToken,
+      client.phone_number_id
+    );
+  } else {
+    await sendWhatsAppList(
+      conv.phone,
+      'أي منتج تبي تحذفه؟',
+      'اختر',
+      cart.map((item, i) => ({
+        id: `remove_${i}`,
+        title: truncate(item.productTitle, 24)
+      })),
+      accessToken,
+      client.phone_number_id
+    );
+  }
+}
+
+// ============================================================
+// CHECKOUT PROCESSING
+// ============================================================
+
+async function processCheckout(
+  client: any,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  accessToken: string
+): Promise<void> {
+  const cart: CartItem[] = conv.data._cart || [];
+  if (cart.length === 0) {
+    await sendWhatsAppMessage(conv.phone, 'السلة فاضية! اختر منتج أول 👇', accessToken, client.phone_number_id);
+    conv.data._shopifyState = 'catalog';
+    await showProductCatalog(client, conv, config, accessToken, 'اختر منتج:');
+    return;
+  }
+
+  await sendWhatsAppMessage(conv.phone, 'جاري تجهيز طلبك... ⏳', accessToken, client.phone_number_id);
+
+  // Create multi-item checkout
+  const lines = cart.map(item => ({ variantId: item.variantId, quantity: 1 }));
+  let checkout = await createMultiItemCheckout(config.domain, config.storefrontToken, lines);
+
+  // Fallback: try single-item checkout if only 1 item and multi failed
+  if (!checkout && cart.length === 1) {
+    checkout = await createCheckout(config.domain, config.storefrontToken, cart[0]!.variantId, 1);
+  }
+
+  if (!checkout) {
+    await sendWhatsAppMessage(conv.phone, 'عذراً، صار خطأ في إنشاء الطلب. جرب مرة ثانية.', accessToken, client.phone_number_id);
+    return;
+  }
+
+  conv.data._checkout = {
+    url: checkout.checkoutUrl,
+    totalPrice: checkout.totalPrice,
+    currency: checkout.currency
+  };
+
+  // Build cart summary for payment message
+  let cartSummary = '';
+  for (const item of cart) {
+    cartSummary += `📦 ${item.productTitle}`;
+    if (item.variantTitle && item.variantTitle !== 'Default Title') {
+      cartSummary += ` (${item.variantTitle})`;
+    }
+    cartSummary += '\n';
+  }
+
+  const price = formatPrice(checkout.totalPrice, checkout.currency);
+  const paymentMsg = `🛒 *تفاصيل طلبك:*\n\n${cartSummary}\n💰 المجموع: ${price}\n\n💳 *ادفع من هنا:*\n${checkout.checkoutUrl}\n\nبعد ما تدفع، اضغط "تم الدفع" 👇`;
+  await sendWhatsAppMessage(conv.phone, paymentMsg, accessToken, client.phone_number_id);
+  conv.messages.push({ role: 'assistant', content: paymentMsg });
+
+  await sleep(500);
+
+  await sendWhatsAppButtons(
+    conv.phone,
+    'هل دفعت؟ 💳',
+    [
+      { id: 'paid_yes', title: 'تم الدفع ✅' },
+      { id: 'paid_help', title: 'أحتاج مساعدة' }
+    ],
+    accessToken,
+    client.phone_number_id
+  );
+
+  conv.data._shopifyState = 'awaiting_payment';
+}
+
+// ============================================================
+// OWNER NOTIFICATION — includes full cart and order history
+// ============================================================
+
 async function notifyOwner(
   client: any,
   conv: ConversationState,
@@ -609,14 +1009,32 @@ async function notifyOwner(
   type: 'paid' | 'help' | 'urgent' | 'unverified',
   accessToken: string
 ): Promise<void> {
-  const product = conv.data._selectedProduct as ShopifyProduct | undefined;
+  const cart: CartItem[] = conv.data._cart || [];
   const checkout = conv.data._checkout;
-  const price = formatPrice(
-    checkout?.totalPrice || product?.priceMin || '0',
-    checkout?.currency || config.currency
-  );
+  const totalPrice = checkout?.totalPrice || (cart.length > 0 ? cart.reduce((s: number, i: CartItem) => s + parseFloat(i.price), 0).toFixed(2) : '0');
+  const price = formatPrice(totalPrice, checkout?.currency || config.currency);
   const time = new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' });
   const displayName = conv.data.name || conv.phone;
+
+  // Build cart text
+  let cartText = '';
+  if (cart.length > 0) {
+    cartText = cart.map(i => {
+      let line = `📦 ${i.productTitle}`;
+      if (i.variantTitle && i.variantTitle !== 'Default Title') line += ` (${i.variantTitle})`;
+      line += ` — ${formatPrice(i.price, checkout?.currency || config.currency)}`;
+      return line;
+    }).join('\n');
+  } else if (conv.data._selectedProduct) {
+    cartText = `📦 ${conv.data._selectedProduct.title}`;
+    if (conv.data._selectedVariantTitle && conv.data._selectedVariantTitle !== 'Default Title') {
+      cartText += `\n📏 النوع: ${conv.data._selectedVariantTitle}`;
+    }
+  }
+
+  // Order history summary
+  const history = conv.data._orderHistory || [];
+  const historyText = history.length > 0 ? `\n📜 طلبات سابقة: ${history.length}` : '';
 
   let notification = '';
 
@@ -627,9 +1045,9 @@ async function notifyOwner(
 📱 ${conv.phone}
 💬 wa.me/${conv.phone.replace('+', '')}
 
-📦 المنتج: ${product?.title || '-'}${conv.data._selectedVariantTitle && conv.data._selectedVariantTitle !== 'Default Title' ? `\n📏 النوع: ${conv.data._selectedVariantTitle}` : ''}
-💰 المبلغ: ${price}
-🔗 ${checkout?.url || '-'}
+${cartText || '📦 -'}
+💰 المجموع: ${price}
+🔗 ${checkout?.url || '-'}${historyText}
 
 ⏰ ${time}`;
   } else if (type === 'unverified') {
@@ -639,9 +1057,9 @@ async function notifyOwner(
 📱 ${conv.phone}
 💬 wa.me/${conv.phone.replace('+', '')}
 
-📦 المنتج: ${product?.title || '-'}${conv.data._selectedVariantTitle && conv.data._selectedVariantTitle !== 'Default Title' ? `\n📏 النوع: ${conv.data._selectedVariantTitle}` : ''}
-💰 المبلغ: ${price}
-🔗 ${checkout?.url || '-'}
+${cartText || '📦 -'}
+💰 المجموع: ${price}
+🔗 ${checkout?.url || '-'}${historyText}
 
 ⚠️ لم يتم التحقق من الدفع بعد
 ⏰ ${time}`;
@@ -652,8 +1070,8 @@ async function notifyOwner(
 📱 ${conv.phone}
 💬 wa.me/${conv.phone.replace('+', '')}
 
-📦 المنتج: ${product?.title || '-'}
-💰 ${price}
+${cartText || '-'}
+💰 ${price}${historyText}
 
 ⏰ ${time}`;
   } else {
@@ -663,8 +1081,8 @@ async function notifyOwner(
 📱 ${conv.phone}
 💬 wa.me/${conv.phone.replace('+', '')}
 
-📦 آخر طلب: ${product?.title || '-'}
-💰 ${price}
+${cartText || '📦 آخر طلب: -'}
+💰 ${price}${historyText}
 
 آخر رسالة: ${conv.messages[conv.messages.length - 1]?.content || '-'}
 
@@ -690,50 +1108,28 @@ async function notifyOwner(
   }
 }
 
-function truncate(text: string, max: number): string {
-  return text.length > max ? text.substring(0, max - 1) + '…' : text;
-}
-
 // ============================================================
-// SMART TITLE — puts weight + key differentiator first
-// so they survive WhatsApp's 24-char list title limit
-// e.g. "Jumbo Premium Royal Khalas Dates, 2kg" → "2kg Jumbo Khalas"
+// SMART VARIANT TITLE — fits variant + price in WhatsApp button limit
 // ============================================================
 
-function smartTitle(title: string, max: number): string {
-  // Extract weight (e.g. 2kg, 1kg, 900g, 2 kg)
-  const weightMatch = title.match(/(\d+(?:\.\d+)?)\s*(kg|g)\b/i);
-  const weight = weightMatch ? weightMatch[0].replace(/\s+/g, '').toLowerCase() : null;
-
-  // Key qualifiers (ordered by importance)
-  const qualifiers = ['Jumbo', 'Premium'];
-  const foundQualifier = qualifiers.find(q => title.toLowerCase().includes(q.toLowerCase()));
-
-  // Date variety names
-  const varieties = ['Khalas', 'Sagai', 'Sukkari', 'Ajwa', 'Medjool', 'Mabroom', 'Safawi'];
-  const foundVariety = varieties.find(v => title.toLowerCase().includes(v.toLowerCase()));
-
-  // Special extra descriptor after variety (e.g. "Ajwa Al-Madinah")
-  let extra = '';
-  if (foundVariety) {
-    const afterVariety = title.substring(title.toLowerCase().indexOf(foundVariety.toLowerCase()) + foundVariety.length);
-    const extraMatch = afterVariety.match(/^[\s-]+(Al-\w+|\w+)/i);
-    if (extraMatch && extraMatch[1] && !['Dates', 'Date'].includes(extraMatch[1])) {
-      extra = ' ' + extraMatch[1];
-    }
+function smartVariantTitle(variantTitle: string, price: string, currency: string | undefined, max: number): string {
+  if (variantTitle === 'Default Title') {
+    return truncate(formatPrice(price, currency), max);
   }
 
-  if (!weight && !foundQualifier && !foundVariety) {
-    return truncate(title, max);
+  const smartName = smartTitle(variantTitle, max);
+  const priceStr = formatPrice(price, currency);
+  const full = `${smartName} ${priceStr}`;
+
+  if (full.length <= max) return full;
+
+  // Prioritize price — truncate name to fit
+  const availableForName = max - priceStr.length - 1;
+  if (availableForName >= 3) {
+    return `${truncate(smartName, availableForName)} ${priceStr}`;
   }
 
-  // Build compact title: weight first, then qualifier, then variety
-  const parts: string[] = [];
-  if (weight) parts.push(weight);
-  if (foundQualifier) parts.push(foundQualifier);
-  if (foundVariety) parts.push(foundVariety + extra);
-  const compact = parts.join(' ');
-  return truncate(compact, max);
+  return truncate(full, max);
 }
 
 // ============================================================
