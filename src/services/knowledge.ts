@@ -26,19 +26,18 @@ export interface ConversationMessage {
   content: string;
 }
 
-// Gulf Arabic system prompt - concise and natural
-const SYSTEM_PROMPT = `أنت مساعد لـ {businessName}.
+// Gulf Arabic system prompt — knowledgeable salesperson
+const SYSTEM_PROMPT = `أنت مسؤول مبيعات محترف لـ {businessName}. تعرف كل شي عن المنتجات وتساعد العميل يختار.
 
-قواعد مهمة:
-1. رد بالعربي السعودي (اللهجة الخليجية) - قصير ومباشر
-2. أجب فقط من المعلومات المتوفرة أدناه - لا تخترع ولا تضيف معلومات من عندك
-3. لو ما تعرف، قل "ما عندي هالمعلومة"
-4. ردودك قصيرة - جملة أو جملتين كافي
-5. لا تستخدم إيموجي نهائياً
-6. لا تكرر نفس الجواب بصيغة مختلفة - أعطِ جواب واحد واضح
-7. لا ترتب المنتجات حسب الأفضلية إلا إذا موجود في المعلومات - اذكرها فقط
+قواعد:
+1. رد بالعربي الخليجي — قصير ومباشر، جملة أو جملتين
+2. استخدم المعلومات المتوفرة أدناه للإجابة — إذا السؤال عن منتج موجود في القائمة، أجب بثقة عن سعره ومواصفاته
+3. لو السؤال عن شي مو موجود أبداً في المعلومات (مثل سياسة الإرجاع أو مواعيد التوصيل)، قل "خليني أحولك لفريقنا يساعدك"
+4. لا تخترع معلومات غير موجودة — بس لا تقول "ما عندي" إذا الجواب موجود في المنتجات
+5. لا تستخدم إيموجي
+6. إذا العميل يسأل عن أفضل منتج أو توصية، اذكر المنتجات المتوفرة وخل العميل يختار
 
-معلومات العمل:
+معلومات العمل والمنتجات:
 {knowledgeBase}
 
 معلومات العميل:
@@ -111,7 +110,7 @@ export async function generateKnowledgeResponse(
     const answer = textBlock?.type === 'text' ? textBlock.text.trim() : '';
 
     // Detect if AI is uncertain or suggesting handover
-    const uncertainPhrases = ['ما عندي', 'ما أعرف', 'مو متأكد', 'أحولك', 'موظف', 'مستشار'];
+    const uncertainPhrases = ['ما عندي', 'ما أعرف', 'مو متأكد', 'أحولك', 'لفريقنا', 'موظف', 'مستشار'];
     const suggestHandover = uncertainPhrases.some(phrase => answer.includes(phrase));
 
     return {
@@ -175,27 +174,42 @@ export function looksLikeQuestion(message: string): boolean {
   const lowerMessage = message.toLowerCase().trim();
 
   // Too short to be a real question
-  if (lowerMessage.length < 6) return false;
+  if (lowerMessage.length < 4) return false;
 
   // Explicit question marks — always a question
   if (lowerMessage.includes('?') || lowerMessage.includes('؟')) return true;
 
-  // Strong question words — high confidence
+  // Strong question words — high confidence (no question mark needed)
   const strongIndicators = [
+    // Question words
     'كم', 'كيف', 'متى', 'وين', 'ليش', 'ليه', 'شو', 'وش', 'ايش', 'إيش',
-    'سعر', 'اسعار', 'أسعار', 'تكلفة',
-    'عندكم', 'عندك', 'فيه',
-    'تقدر', 'تقدرون',
-    'احسن', 'أحسن', 'افضل', 'أفضل', 'الفرق'
+    // Pricing
+    'سعر', 'اسعار', 'أسعار', 'تكلفة', 'بكم',
+    // Availability
+    'عندكم', 'عندك', 'فيه', 'متوفر', 'موجود',
+    // Capability
+    'تقدر', 'تقدرون', 'يصير', 'ينفع',
+    // Comparison / recommendation
+    'احسن', 'أحسن', 'افضل', 'أفضل', 'الفرق', 'انصح', 'أنصح', 'تنصح',
+    // Request patterns (natural questions without ?)
+    'ابي اعرف', 'أبي أعرف', 'ابغى اعرف', 'أبغى أعرف',
+    'ودي اعرف', 'حابب اعرف', 'حاب اعرف',
+    'قولي', 'قول لي', 'خبرني', 'خبر لي',
+    'وش عندكم', 'ايش عندكم', 'شو عندكم',
+    'وش الأنواع', 'ايش الانواع',
+    'ابي شي', 'أبي شي', 'ابغى شي', 'أبغى شي',
+    'شنو', 'شلون'
   ];
   if (strongIndicators.some(q => lowerMessage.includes(q))) return true;
 
   // Weak indicators — only match if message is long enough to be a real question
-  if (lowerMessage.length >= 10) {
+  if (lowerMessage.length >= 8) {
     const weakIndicators = [
       'هل', 'موقع', 'عنوان', 'رقم', 'تواصل',
       'مواعيد', 'دوام', 'ساعات', 'متاح', 'فاضي',
-      'ممكن', 'توصيل', 'شحن'
+      'ممكن', 'توصيل', 'شحن', 'تبديل', 'استرجاع', 'ضمان',
+      'نوع', 'أنواع', 'انواع', 'مقاس', 'حجم',
+      'طريقة', 'كيفية'
     ];
     if (weakIndicators.some(q => lowerMessage.includes(q))) return true;
   }
