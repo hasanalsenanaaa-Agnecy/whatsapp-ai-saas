@@ -15,8 +15,7 @@ import {
 import {
   sendWhatsAppMessage,
   sendWhatsAppButtons,
-  sendWhatsAppList,
-  sendWhatsAppImage
+  sendWhatsAppList
 } from './whatsapp.js';
 import { createLead } from './database.js';
 import { looksLikeQuestion, generateKnowledgeResponse, isAIAvailable } from './knowledge.js';
@@ -77,7 +76,7 @@ export async function handleShopifyAgent(
 
   // Smart AI answering — intercept product questions at any state (except welcome)
   if (shopifyState !== 'welcome') {
-    const isButtonId = /^(pick_\d+|var_\d+|show_images|pick_direct|paid_yes|paid_help|new_order|talk_agent|add_more|checkout_now|view_cart|no_thanks|remove_item|remove_\d+|help_menu|help_order_status|help_returns|help_agent)$/.test(message.trim());
+    const isButtonId = /^(pick_\d+|var_\d+|paid_yes|paid_help|new_order|talk_agent|add_more|checkout_now|view_cart|no_thanks|remove_item|remove_\d+|help_menu|help_order_status|help_returns|help_agent)$/.test(message.trim());
     if (!isButtonId && looksLikeQuestion(message)) {
       const answered = await handleProductQuestion(client, conv, config, message, accessToken);
       if (answered) return;
@@ -89,7 +88,9 @@ export async function handleShopifyAgent(
       await handleWelcome(client, conv, config, message, accessToken);
       break;
     case 'browse_choice':
-      await handleBrowseChoice(client, conv, config, message, accessToken);
+      // Legacy — redirect to catalog (browse_choice step was removed)
+      conv.data._shopifyState = 'catalog';
+      await showProductCatalog(client, conv, config, accessToken, 'تفضل، اختر من منتجاتنا:');
       break;
     case 'catalog':
       await handleCatalogSelection(client, conv, config, message, accessToken);
@@ -118,7 +119,7 @@ export async function handleShopifyAgent(
 }
 
 // ============================================================
-// STATE: WELCOME — Greet + fetch products + ask browse preference
+// STATE: WELCOME — Greet + fetch products + go straight to catalog
 // ============================================================
 
 async function handleWelcome(
@@ -128,16 +129,11 @@ async function handleWelcome(
   _message: string,
   accessToken: string
 ): Promise<void> {
-  // Send welcome
-  const welcome = `أهلاً وسهلاً في *${config.storeName}*\n\nيسعدنا نخدمك. خلني أعرض لك منتجاتنا`;
-  await sendWhatsAppMessage(conv.phone, welcome, accessToken, client.phone_number_id);
-  conv.messages.push({ role: 'assistant', content: welcome });
-
-  // Fetch products
+  // Fetch products first
   const products = await fetchProducts(config.domain, config.storefrontToken, 10);
 
   if (products.length === 0) {
-    await sendWhatsAppMessage(conv.phone, 'عذراً، ما فيه منتجات متوفرة حالياً.', accessToken, client.phone_number_id);
+    await sendWhatsAppMessage(conv.phone, `أهلاً وسهلاً في *${config.storeName}*\n\nعذراً، ما فيه منتجات متوفرة حالياً.`, accessToken, client.phone_number_id);
     return;
   }
 
@@ -155,82 +151,12 @@ async function handleWelcome(
     variants: p.variants
   }));
 
-  // Ask customer preference before sending images
-  await sendWhatsAppButtons(
-    conv.phone,
-    'تبي تشوف صور المنتجات ولا تختار من القائمة مباشرة؟',
-    [
-      { id: 'show_images', title: 'عرض الصور' },
-      { id: 'pick_direct', title: 'اختر مباشرة' }
-    ],
-    accessToken,
-    client.phone_number_id
-  );
+  // Welcome + go straight to catalog — no browse_choice step
+  const welcome = `أهلاً وسهلاً في *${config.storeName}*\n\nتفضل، اختر من منتجاتنا:`;
+  await sendWhatsAppMessage(conv.phone, welcome, accessToken, client.phone_number_id);
+  conv.messages.push({ role: 'assistant', content: welcome });
 
-  conv.data._shopifyState = 'browse_choice';
-}
-
-// ============================================================
-// STATE: BROWSE_CHOICE — Customer decides images or direct list
-// ============================================================
-
-async function handleBrowseChoice(
-  client: any,
-  conv: ConversationState,
-  config: ShopifyAgentConfig,
-  message: string,
-  accessToken: string
-): Promise<void> {
-  const lower = message.toLowerCase().trim();
-  const products: ShopifyProduct[] = conv.data._products || [];
-
-  const wantsImages = lower === 'show_images' || lower.includes('صور') || lower.includes('شوف');
-  const wantsDirect = lower === 'pick_direct' || lower.includes('مباشرة') || lower.includes('قائمة') || lower.includes('اختر');
-
-  if (wantsImages) {
-    // Send all product images first
-    for (const product of products) {
-      const priceText = formatPrice(product.priceMin, config.currency);
-      const caption = `*${product.title}*\n${priceText}`;
-      if (product.imageUrl) {
-        await sendWhatsAppImage(conv.phone, product.imageUrl, caption, accessToken, client.phone_number_id);
-      } else {
-        await sendWhatsAppMessage(conv.phone, caption, accessToken, client.phone_number_id);
-      }
-      await sleep(500);
-    }
-    // Then show selection list
-    await showProductCatalog(client, conv, config, accessToken, 'اختر المنتج اللي تبيه:');
-    conv.data._shopifyState = 'catalog';
-    return;
-  }
-
-  if (wantsDirect) {
-    // Skip images, show list directly
-    await showProductCatalog(client, conv, config, accessToken, 'اختر المنتج اللي تبيه:');
-    conv.data._shopifyState = 'catalog';
-    return;
-  }
-
-  // Maybe they already typed a product name — try to match
-  const matched = matchProduct(message, products);
-  if (matched) {
-    conv.data._shopifyState = 'catalog';
-    await handleCatalogSelection(client, conv, config, message, accessToken);
-    return;
-  }
-
-  // Re-show the choice buttons
-  await sendWhatsAppButtons(
-    conv.phone,
-    'تبي تشوف صور المنتجات ولا تختار من القائمة مباشرة؟',
-    [
-      { id: 'show_images', title: 'عرض الصور' },
-      { id: 'pick_direct', title: 'اختر مباشرة' }
-    ],
-    accessToken,
-    client.phone_number_id
-  );
+  await showProductCatalog(client, conv, config, accessToken, '');
 }
 
 // ============================================================
@@ -286,21 +212,13 @@ async function handleCatalogSelection(
     );
     conv.data._shopifyState = 'product_detail';
   } else {
-    // Single variant — add to cart immediately, re-show catalog
+    // Single variant — add to cart immediately, re-show catalog with confirmation in prompt
     const variant = availableVariants[0] || selected.variants[0];
     addToCart(conv, selected, variant?.id, variant?.title, variant?.price || selected.priceMin);
-
-    const price = formatPrice(variant?.price || selected.priceMin, config.currency);
-    await sendWhatsAppMessage(
-      conv.phone,
-      `تمت إضافة *${selected.title}* للسلة. (${price})`,
-      accessToken, client.phone_number_id
-    );
     conv.messages.push({ role: 'assistant', content: `Added ${selected.title} to cart` });
 
-    // Stay in catalog — show products again with cart actions
-    await sleep(300);
-    await showProductCatalog(client, conv, config, accessToken, 'اختر منتج ثاني أو اعرض السلة:');
+    const price = formatPrice(variant?.price || selected.priceMin, config.currency);
+    await showProductCatalog(client, conv, config, accessToken, `تمت إضافة *${selected.title}* (${price}) للسلة.\n\nتبي تضيف شي ثاني؟`);
   }
 }
 
@@ -338,21 +256,13 @@ async function handleProductAction(
     return;
   }
 
-  // Add to cart immediately after variant selection
+  // Add to cart immediately after variant selection, re-show catalog with confirmation
   addToCart(conv, product, variant.id, variant.title, variant.price);
-
-  const price = formatPrice(variant.price, config.currency);
-  await sendWhatsAppMessage(
-    conv.phone,
-    `تمت إضافة *${product.title}* (${variant.title}) للسلة. (${price})`,
-    accessToken, client.phone_number_id
-  );
   conv.messages.push({ role: 'assistant', content: `Added ${product.title} (${variant.title}) to cart` });
 
-  // Back to catalog — show products again with cart actions
+  const price = formatPrice(variant.price, config.currency);
   conv.data._shopifyState = 'catalog';
-  await sleep(300);
-  await showProductCatalog(client, conv, config, accessToken, 'اختر منتج ثاني أو اعرض السلة:');
+  await showProductCatalog(client, conv, config, accessToken, `تمت إضافة *${product.title}* — ${variant.title} (${price}) للسلة.\n\nتبي تضيف شي ثاني؟`);
 }
 
 // ============================================================
@@ -368,10 +278,10 @@ async function handleCartAdd(
 ): Promise<void> {
   const lower = message.toLowerCase().trim();
 
-  // Add more products
+  // Add more products — skip cart buttons since user just saw the cart
   if (lower === 'add_more' || lower.includes('أضف') || lower.includes('ضيف') || lower.includes('زيد')) {
     conv.data._shopifyState = 'catalog';
-    await showProductCatalog(client, conv, config, accessToken, 'تفضل اختر منتج:');
+    await showProductCatalog(client, conv, config, accessToken, 'تفضل اختر منتج:', true);
     return;
   }
 
@@ -730,11 +640,25 @@ async function handleProductQuestion(
   // Build knowledge base from client data + product catalog
   const clientKB = client.knowledge_base || [];
   const products: ShopifyProduct[] = conv.data._products || [];
-  const productKB = products.map(p => ({
-    category: 'منتجات',
-    question: p.title,
-    answer: `${p.title} — السعر: ${formatPrice(p.priceMin, config.currency)}`
-  }));
+  const productKB = products.map(p => {
+    // Build rich product info: title, price range, variants, description
+    let answer = `${p.title} — السعر: ${formatPrice(p.priceMin, config.currency)}`;
+    if (p.priceMax && p.priceMax !== p.priceMin) {
+      answer += ` إلى ${formatPrice(p.priceMax, config.currency)}`;
+    }
+    const availableVariants = p.variants?.filter((v: any) => v.available && v.title !== 'Default Title') || [];
+    if (availableVariants.length > 0) {
+      answer += `\nالأنواع المتوفرة: ${availableVariants.map((v: any) => `${v.title} (${formatPrice(v.price, config.currency)})`).join('، ')}`;
+    }
+    // Add description — strip HTML and limit length
+    if (p.description) {
+      const cleanDesc = p.description.replace(/<[^>]*>/g, '').trim();
+      if (cleanDesc.length > 0) {
+        answer += `\nالوصف: ${cleanDesc.substring(0, 200)}`;
+      }
+    }
+    return { category: 'منتجات', question: p.title, answer };
+  });
   const augmentedKB = [...clientKB, ...productKB];
 
   if (augmentedKB.length === 0) return false;
@@ -750,6 +674,23 @@ async function handleProductQuestion(
 
     await sendWhatsAppMessage(conv.phone, response.answer, accessToken, client.phone_number_id);
     conv.messages.push({ role: 'assistant', content: response.answer });
+
+    // In post-sale states, offer ordering after answering a question
+    const postSaleStates = ['done', 'order_complete'];
+    if (postSaleStates.includes(conv.data._shopifyState)) {
+      await sleep(300);
+      await sendWhatsAppButtons(
+        conv.phone,
+        'تبي تطلب شي؟',
+        [
+          { id: 'new_order', title: 'طلب جديد' },
+          { id: 'help_menu', title: 'مساعدة' }
+        ],
+        accessToken,
+        client.phone_number_id
+      );
+    }
+
     return true;
   } catch (error) {
     console.error('❌ Product question AI error:', error);
@@ -990,9 +931,18 @@ async function processCheckout(
     return;
   }
 
+  // Calculate cart total from our local cart (source of truth)
+  const cartTotal = cart.reduce((sum: number, i: CartItem) => sum + parseFloat(i.price), 0);
+  const cartTotalStr = cartTotal.toFixed(2);
+
+  // Log if Shopify API total differs from our cart total
+  if (checkout.totalPrice && Math.abs(parseFloat(checkout.totalPrice) - cartTotal) > 0.01) {
+    console.warn(`⚠️ Price mismatch: Shopify API=${checkout.totalPrice}, Cart calculated=${cartTotalStr} (using cart total)`);
+  }
+
   conv.data._checkout = {
     url: checkout.checkoutUrl,
-    totalPrice: checkout.totalPrice,
+    totalPrice: cartTotalStr,  // Use cart-calculated total, not Shopify API
     currency: checkout.currency
   };
 
@@ -1003,10 +953,11 @@ async function processCheckout(
     if (item.variantTitle && item.variantTitle !== 'Default Title') {
       cartSummary += ` (${item.variantTitle})`;
     }
+    cartSummary += ` — ${formatPrice(item.price, checkout.currency)}`;
     cartSummary += '\n';
   }
 
-  const price = formatPrice(checkout.totalPrice, checkout.currency);
+  const price = formatPrice(cartTotalStr, checkout.currency);
   const paymentMsg = `*تفاصيل طلبك:*\n\n${cartSummary}\nالمجموع: ${price}\n\n*ادفع من هنا:*\n${checkout.checkoutUrl}\n\nبعد ما تدفع، اضغط "تم الدفع"`;
   await sendWhatsAppMessage(conv.phone, paymentMsg, accessToken, client.phone_number_id);
   conv.messages.push({ role: 'assistant', content: paymentMsg });
@@ -1192,7 +1143,8 @@ async function showProductCatalog(
   conv: ConversationState,
   _config: ShopifyAgentConfig,
   accessToken: string,
-  prompt: string
+  prompt: string,
+  skipCartButtons = false
 ): Promise<void> {
   const products: ShopifyProduct[] = conv.data._products || [];
   if (products.length === 0) {
@@ -1225,8 +1177,8 @@ async function showProductCatalog(
     );
   }
 
-  // If cart has items, show cart action buttons as a follow-up
-  if (cart.length > 0) {
+  // If cart has items and not suppressed, show cart action buttons as a follow-up
+  if (cart.length > 0 && !skipCartButtons) {
     await sleep(300);
     const cartCount = cart.length;
     const label = cartCount === 1 ? 'منتج واحد' : `${cartCount} منتجات`;
