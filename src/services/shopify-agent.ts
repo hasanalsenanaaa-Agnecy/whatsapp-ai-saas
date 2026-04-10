@@ -151,12 +151,11 @@ async function handleWelcome(
     variants: p.variants
   }));
 
-  // Welcome + go straight to catalog — no browse_choice step
+  // Welcome IS the catalog prompt — single message, not two
   const welcome = `أهلاً وسهلاً في *${config.storeName}*\n\nتفضل، اختر من منتجاتنا:`;
-  await sendWhatsAppMessage(conv.phone, welcome, accessToken, client.phone_number_id);
   conv.messages.push({ role: 'assistant', content: welcome });
 
-  await showProductCatalog(client, conv, config, accessToken, '');
+  await showProductCatalog(client, conv, config, accessToken, welcome);
 }
 
 // ============================================================
