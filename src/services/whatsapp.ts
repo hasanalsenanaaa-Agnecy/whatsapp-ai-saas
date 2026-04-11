@@ -1,6 +1,6 @@
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v18.0';
 
-interface ButtonOption { id: string; title: string; }
+interface ButtonOption { id: string; title: string; description?: string; }
 
 export async function sendWhatsAppMessage(to: string, message: string, accessToken: string, phoneNumberId: string): Promise<boolean> {
   if (!to || !message || !accessToken || !phoneNumberId) {
@@ -99,6 +99,50 @@ export async function sendWhatsAppImage(to: string, imageUrl: string, caption: s
   }
 }
 
+export async function sendWhatsAppButtonsWithImage(to: string, imageUrl: string, bodyText: string, buttons: ButtonOption[], accessToken: string, phoneNumberId: string): Promise<boolean> {
+  if (!to || !bodyText || !buttons?.length || !accessToken || !phoneNumberId) return false;
+
+  const limitedButtons = buttons.slice(0, 3);
+
+  try {
+    const interactive: Record<string, any> = {
+      type: 'button',
+      body: { text: bodyText },
+      action: {
+        buttons: limitedButtons.map(btn => ({
+          type: 'reply',
+          reply: { id: btn.id, title: btn.title.substring(0, 20) }
+        }))
+      }
+    };
+
+    if (imageUrl) {
+      interactive.header = { type: 'image', image: { link: imageUrl } };
+    }
+
+    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'interactive',
+        interactive
+      })
+    });
+
+    if (!response.ok) {
+      console.error('❌ Buttons+image error:', await response.text());
+      return sendWhatsAppButtons(to, bodyText, buttons, accessToken, phoneNumberId);
+    }
+    console.log(`✅ Buttons+image sent to ${to}`);
+    return true;
+  } catch (error) {
+    return sendWhatsAppButtons(to, bodyText, buttons, accessToken, phoneNumberId);
+  }
+}
+
 export async function sendWhatsAppList(to: string, bodyText: string, buttonText: string, options: ButtonOption[], accessToken: string, phoneNumberId: string): Promise<boolean> {
   if (!to || !bodyText || !options?.length || !accessToken || !phoneNumberId) return false;
 
@@ -118,7 +162,11 @@ export async function sendWhatsAppList(to: string, bodyText: string, buttonText:
           body: { text: bodyText },
           action: {
             button: buttonText.substring(0, 20),
-            sections: [{ title: 'الخيارات', rows: limitedOptions.map(opt => ({ id: opt.id, title: opt.title.substring(0, 24) })) }]
+            sections: [{ title: 'الخيارات', rows: limitedOptions.map(opt => {
+                  const row: Record<string, string> = { id: opt.id, title: opt.title.substring(0, 24) };
+                  if (opt.description) row.description = opt.description.substring(0, 72);
+                  return row;
+                }) }]
           }
         }
       })
