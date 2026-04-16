@@ -231,10 +231,11 @@ ${productsText}
 
     await sendWhatsAppButtons(
       conv.phone,
-      'تبي تطلب شيء ثاني؟ 😊',
+      'شكراً لتسوقك! 🙏',
       [
         { id: 'new_order', title: 'طلب جديد 🛍️' },
-        { id: 'no_thanks', title: 'لا شكراً 👋' }
+        { id: 'track_order', title: 'تتبع الطلب 📦' },
+        { id: 'contact_us', title: 'تواصل معنا 💬' }
       ],
       accessToken,
       client.phone_number_id
