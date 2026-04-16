@@ -108,15 +108,17 @@ export async function handleShopifyWebhook(
   // Cast to any since DB returns dynamic shape (same pattern as shopify-agent.ts)
   const client = clientRaw as any;
 
-  // Verify HMAC signature
+  // Verify HMAC signature — required in production
   const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET || client.settings?.shopify_webhook_secret || client.settings?.shopify?.webhook_secret;
-  if (webhookSecret && hmacHeader) {
-    if (!verifyShopifyHmac(rawBody, hmacHeader, webhookSecret)) {
-      console.error('Shopify webhook: invalid HMAC signature');
+  if (!webhookSecret) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('Shopify webhook: no HMAC secret configured — request rejected');
       return;
     }
-  } else {
-    console.warn('Shopify webhook: HMAC verification skipped (no secret configured)');
+    console.warn('Shopify webhook: HMAC verification skipped (no secret — dev only)');
+  } else if (!hmacHeader || !verifyShopifyHmac(rawBody, hmacHeader, webhookSecret)) {
+    console.error('Shopify webhook: invalid or missing HMAC signature');
+    return;
   }
 
   const order = payload as ShopifyOrderPayload;

@@ -93,12 +93,16 @@ export async function processReminders(): Promise<{
  * Add this route to your index.ts
  */
 export async function handleReminderCron(request: any, reply: any): Promise<void> {
-  // Verify QStash signature if present
-  const signature = request.headers['upstash-signature'];
-  if (signature) {
-    // In production, verify the signature
-    // For now, we'll skip verification
-    console.log('📅 QStash trigger received');
+  // Verify bearer secret — set CRON_SECRET in env, configure QStash to send
+  // Authorization: Bearer <CRON_SECRET> with every request.
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    const authHeader = request.headers['authorization'] as string | undefined;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (token !== cronSecret) {
+      console.error('❌ Cron: invalid or missing CRON_SECRET');
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
   }
 
   try {

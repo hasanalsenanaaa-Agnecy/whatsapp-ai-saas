@@ -1,18 +1,73 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
+import rateLimit from '@fastify/rate-limit';
 import { initDatabase, getClientByPhoneNumberId } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
 import { handleReminderCron } from './cron/reminders.js';
 import { handleShopifyWebhook } from './services/shopify-webhook.js';
+import { checkRateLimit } from './services/rateLimiter.js';
 import crypto from 'crypto';
 import { sendAlert, alertError } from './services/alerts.js';
+
+// ============================================================
+// STARTUP VALIDATION — fail fast before the server accepts traffic
+// ============================================================
+
+function validateRequiredEnv() {
+  const required = [
+    'DATABASE_URL',
+    'WHATSAPP_VERIFY_TOKEN',
+    'WHATSAPP_APP_SECRET',
+  ];
+  const missing = required.filter(k => !process.env[k]);
+  if (missing.length > 0) {
+    console.error('❌ Missing required environment variables:', missing.join(', '));
+    process.exit(1);
+  }
+}
+
+validateRequiredEnv();
+
+// ============================================================
+// MESSAGE DEDUPLICATION
+// WhatsApp retries webhooks on timeout. Track processed message
+// IDs for 10 minutes to avoid double-processing.
+// ============================================================
+
+const processedMessages = new Map<string, number>();
+const DEDUP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function isDuplicate(messageId: string): boolean {
+  const seen = processedMessages.get(messageId);
+  if (seen && Date.now() - seen < DEDUP_TTL_MS) return true;
+  processedMessages.set(messageId, Date.now());
+  return false;
+}
+
+// Prune expired entries every 15 minutes
+setInterval(() => {
+  const cutoff = Date.now() - DEDUP_TTL_MS;
+  for (const [id, ts] of processedMessages) {
+    if (ts < cutoff) processedMessages.delete(id);
+  }
+}, 15 * 60 * 1000);
+
+// ============================================================
+// SERVER
+// ============================================================
 
 const fastify = Fastify({
   logger: {
     level: process.env.LOG_LEVEL || 'info',
     transport: process.env.NODE_ENV !== 'production' ? { target: 'pino-pretty' } : undefined
   }
+});
+
+// Global rate limit — 200 req/min per IP (protects all routes)
+await fastify.register(rateLimit, {
+  max: 200,
+  timeWindow: '1 minute'
 });
 
 // Capture raw body for signature verification
@@ -30,6 +85,10 @@ fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, bo
 await initDatabase();
 await initGoogleSheets();
 
+// ============================================================
+// PAYLOAD HELPERS
+// ============================================================
+
 function extractPhoneNumberId(payload: any): string | null {
   return payload?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id || null;
 }
@@ -38,37 +97,47 @@ function extractCustomerPhone(payload: any): string | null {
   return payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || null;
 }
 
+function extractMessageId(payload: any): string | null {
+  return payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.id || null;
+}
+
 function extractMessageText(payload: any): string | null {
   const message = payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
   if (!message) return null;
-  
+
   if (message.type === 'interactive') {
     if (message.interactive?.button_reply) return message.interactive.button_reply.id || message.interactive.button_reply.title || null;
     if (message.interactive?.list_reply) return message.interactive.list_reply.id || message.interactive.list_reply.title || null;
   }
-  if (message.type === 'text') return message.text?.body || null;
+  if (message.type === 'text') {
+    const body = message.text?.body || null;
+    // Reject absurdly long messages (max 4096 chars — WhatsApp's own limit)
+    if (body && body.length > 4096) return null;
+    return body;
+  }
   if (message.type === 'audio') return '[voice]';
   return null;
 }
 
 function verifyWebhookSignature(rawBody: string, signature: string, secret: string): boolean {
   if (!signature || !secret) return false;
-  
   try {
-    const expectedSignature = 'sha256=' + crypto
+    const expected = 'sha256=' + crypto
       .createHmac('sha256', secret)
       .update(rawBody)
       .digest('hex');
-    
-    return signature === expectedSignature;
-  } catch (error) {
-    console.error('Signature error:', error);
+    // Timing-safe comparison prevents timing attacks
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  } catch {
     return false;
   }
 }
 
-// Health check routes
-fastify.get('/', async () => ({ service: 'WhatsApp AI Receptionist', status: 'running', version: '2.0.0' }));
+// ============================================================
+// ROUTES
+// ============================================================
+
+fastify.get('/', async () => ({ service: 'WhatsApp AI Receptionist', status: 'running', version: '3.0.0' }));
 fastify.get('/health', async () => ({ status: 'healthy', uptime: process.uptime() }));
 
 // WhatsApp webhook verification
@@ -86,36 +155,47 @@ fastify.get('/webhook/whatsapp', async (request, reply) => {
 fastify.post('/webhook/whatsapp', async (request, reply) => {
   const signature = request.headers['x-hub-signature-256'] as string;
   const rawBody = (request as any).rawBody as string;
+
+  const appSecret = process.env.WHATSAPP_APP_SECRET;
+  if (appSecret && !verifyWebhookSignature(rawBody, signature, appSecret)) {
+    console.error('❌ Invalid webhook signature — request rejected');
+    return reply.code(401).send({ error: 'Invalid signature' });
+  }
+
   const phoneNumberId = extractPhoneNumberId(request.body);
-  
+  const customerPhone = extractCustomerPhone(request.body);
+  const messageText = extractMessageText(request.body);
+  const messageId = extractMessageId(request.body);
+
+  // Respond 200 immediately — WhatsApp requires fast acknowledgment
   reply.code(200).send({ ok: true });
-  
+
   setImmediate(async () => {
     try {
-      if (!phoneNumberId) return;
-      
-      const customerPhone = extractCustomerPhone(request.body);
-      const messageText = extractMessageText(request.body);
-      if (!customerPhone || !messageText) return;
-      
+      if (!phoneNumberId || !customerPhone || !messageText) return;
+
+      // Skip duplicate webhook deliveries
+      if (messageId && isDuplicate(messageId)) {
+        console.log(`Duplicate message ${messageId} — skipped`);
+        return;
+      }
+
+      // Per-phone rate limit (10 messages/min)
+      if (!checkRateLimit(customerPhone)) {
+        console.warn(`Rate limit exceeded for ${customerPhone}`);
+        return;
+      }
+
       const client = await getClientByPhoneNumberId(phoneNumberId);
       if (!client) {
         console.error('No client found for: ' + phoneNumberId);
         return;
       }
-      
-      const appSecret = process.env.WHATSAPP_APP_SECRET || client.verify_token;
-      
-      // TODO: Fix signature verification - temporarily disabled
-      // if (appSecret && !verifyWebhookSignature(rawBody, signature, appSecret)) {
-      //   console.error('Invalid signature');
-      //   return;
-      // }
-      
+
       console.log('Message from ' + customerPhone + ': ' + messageText);
       await handleIncomingMessage(phoneNumberId, customerPhone, messageText, client.access_token);
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Webhook processing error:', error);
       await alertError(error as Error, 'Webhook processing failed');
     }
   });
@@ -133,7 +213,7 @@ fastify.post('/webhook/shopify', async (request, reply) => {
   const shopDomain = request.headers['x-shopify-shop-domain'] as string | undefined;
   const topic = request.headers['x-shopify-topic'] as string | undefined;
 
-  // Acknowledge immediately (Shopify requires fast response)
+  // Acknowledge immediately — Shopify requires fast response
   reply.code(200).send({ ok: true });
 
   setImmediate(async () => {

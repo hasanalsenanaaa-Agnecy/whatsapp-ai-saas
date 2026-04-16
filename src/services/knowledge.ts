@@ -98,13 +98,19 @@ export async function generateKnowledgeResponse(
       { role: 'user' as const, content: userMessage }
     ];
 
-    // Call Claude
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
-      system: systemPrompt,
-      messages
-    });
+    // Call Claude with timeout
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('AI timeout')), 12_000)
+    );
+    const response = await Promise.race([
+      anthropic.messages.create({
+        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        system: systemPrompt,
+        messages
+      }),
+      timeout
+    ]);
 
     const textBlock = response.content.find(block => block.type === 'text');
     const answer = textBlock?.type === 'text' ? textBlock.text.trim() : '';
@@ -119,8 +125,12 @@ export async function generateKnowledgeResponse(
       suggestHandover
     };
 
-  } catch (error) {
-    console.error('❌ AI error:', error);
+  } catch (error: any) {
+    if (error?.message === 'AI timeout') {
+      console.error('❌ AI fallback timeout after 12s');
+    } else {
+      console.error('❌ AI error:', error);
+    }
     return {
       answer: 'عذراً، صار خطأ. خليني أكمل معك.',
       confident: false,

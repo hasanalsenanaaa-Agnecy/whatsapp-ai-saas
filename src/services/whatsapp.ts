@@ -1,6 +1,55 @@
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v18.0';
+const REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
+const MAX_RETRIES = 3;
 
 interface ButtonOption { id: string; title: string; description?: string; }
+
+// ============================================================
+// FETCH WITH RETRY + TIMEOUT
+// Retries on 429 (rate limit) and 5xx (transient server errors).
+// Does NOT retry on 4xx client errors (bad request, auth failure).
+// ============================================================
+
+async function fetchWithRetry(url: string, options: RequestInit): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timer);
+
+      // Retry on rate limit or server errors
+      if (response.status === 429 || response.status >= 500) {
+        const delay = Math.pow(2, attempt) * 500; // 500ms, 1s, 2s
+        console.warn(`WhatsApp API ${response.status} on attempt ${attempt + 1} — retrying in ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+
+      return response;
+    } catch (error: any) {
+      clearTimeout(timer);
+      lastError = error;
+      if (error.name === 'AbortError') {
+        console.error(`WhatsApp API timeout on attempt ${attempt + 1}`);
+      } else {
+        console.error(`WhatsApp API fetch error on attempt ${attempt + 1}:`, error.message);
+      }
+      if (attempt < MAX_RETRIES - 1) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500));
+      }
+    }
+  }
+
+  throw lastError || new Error('WhatsApp API request failed after retries');
+}
+
+// ============================================================
+// SEND FUNCTIONS
+// ============================================================
 
 export async function sendWhatsAppMessage(to: string, message: string, accessToken: string, phoneNumberId: string): Promise<boolean> {
   if (!to || !message || !accessToken || !phoneNumberId) {
@@ -9,7 +58,7 @@ export async function sendWhatsAppMessage(to: string, message: string, accessTok
   }
 
   try {
-    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+    const response = await fetchWithRetry(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -39,7 +88,7 @@ export async function sendWhatsAppButtons(to: string, bodyText: string, buttons:
   const limitedButtons = buttons.slice(0, 3);
 
   try {
-    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+    const response = await fetchWithRetry(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -75,7 +124,7 @@ export async function sendWhatsAppImage(to: string, imageUrl: string, caption: s
   if (!to || !imageUrl || !accessToken || !phoneNumberId) return false;
 
   try {
-    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+    const response = await fetchWithRetry(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -89,7 +138,6 @@ export async function sendWhatsAppImage(to: string, imageUrl: string, caption: s
 
     if (!response.ok) {
       console.error('❌ Image error:', await response.text());
-      // Fallback to text with link
       return sendWhatsAppMessage(to, `${caption}\n\n🖼️ ${imageUrl}`, accessToken, phoneNumberId);
     }
     console.log(`✅ Image sent to ${to}`);
@@ -120,7 +168,7 @@ export async function sendWhatsAppButtonsWithImage(to: string, imageUrl: string,
       interactive.header = { type: 'image', image: { link: imageUrl } };
     }
 
-    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+    const response = await fetchWithRetry(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -149,7 +197,7 @@ export async function sendWhatsAppList(to: string, bodyText: string, buttonText:
   const limitedOptions = options.slice(0, 10);
 
   try {
-    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+    const response = await fetchWithRetry(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({

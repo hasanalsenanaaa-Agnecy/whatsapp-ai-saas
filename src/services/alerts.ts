@@ -1,7 +1,7 @@
-import axios from 'axios';
+const WHATSAPP_API_URL = 'https://graph.facebook.com/v18.0';
 
-let lastAlertTime: number = 0;
-let alertCount: number = 0;
+let lastAlertTime = 0;
+let alertCount = 0;
 
 export async function sendAlert(
   type: 'error' | 'warning' | 'info',
@@ -11,60 +11,50 @@ export async function sendAlert(
   const ownerPhone = process.env.OWNER_PHONE;
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
-  
+
   if (!ownerPhone || !phoneNumberId || !accessToken) {
-    console.log('Alert not sent - OWNER_PHONE not configured');
+    console.log('Alert not sent — OWNER_PHONE not configured');
     return false;
   }
-  
+
   const now = Date.now();
-  const cooldownMs = 5 * 60 * 1000;
-  
-  if (now - lastAlertTime < cooldownMs) {
-    console.log('Alert suppressed - cooldown active');
+  if (now - lastAlertTime < 5 * 60 * 1000) {
     alertCount++;
+    console.log('Alert suppressed — cooldown active');
     return false;
   }
-  
+
   const emoji = type === 'error' ? '[ERROR]' : type === 'warning' ? '[WARNING]' : '[INFO]';
   const timestamp = new Date().toLocaleString('en-SA', { timeZone: 'Asia/Riyadh' });
-  
-  let alertText = emoji + ' WhatsApp Bot Alert\n\n';
-  alertText += 'Type: ' + type.toUpperCase() + '\n';
-  alertText += 'Time: ' + timestamp + '\n';
-  alertText += 'Message: ' + message + '\n';
-  
-  if (details) {
-    const truncated = details.length > 500 ? details.substring(0, 500) + '...' : details;
-    alertText += '\nDetails:\n' + truncated;
-  }
-  
-  if (alertCount > 0) {
-    alertText += '\n\n' + alertCount + ' alerts suppressed since last notification';
-  }
-  
+
+  let body = `${emoji} WhatsApp Bot Alert\n\nType: ${type.toUpperCase()}\nTime: ${timestamp}\nMessage: ${message}`;
+  if (details) body += `\n\nDetails:\n${details.substring(0, 500)}`;
+  if (alertCount > 0) body += `\n\n${alertCount} alerts suppressed since last notification`;
+
   try {
-    await axios.post(
-      'https://graph.facebook.com/v17.0/' + phoneNumberId + '/messages',
-      {
+    const response = await fetch(`${WHATSAPP_API_URL}/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
         messaging_product: 'whatsapp',
         to: ownerPhone,
         type: 'text',
-        text: { body: alertText }
-      },
-      {
-        headers: {
-          'Authorization': 'Bearer ' + accessToken,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    console.log('Alert sent to ' + ownerPhone);
+        text: { body }
+      })
+    });
+
+    if (!response.ok) {
+      console.error('Alert send failed:', await response.text());
+      return false;
+    }
+
+    console.log(`Alert sent to ${ownerPhone}`);
     lastAlertTime = now;
     alertCount = 0;
     return true;
-    
   } catch (error) {
     console.error('Failed to send alert:', error);
     return false;
@@ -73,9 +63,6 @@ export async function sendAlert(
 
 export async function alertError(error: Error | string, context?: string): Promise<void> {
   const message = context || 'An error occurred';
-  const details = error instanceof Error 
-    ? error.name + ': ' + error.message 
-    : String(error);
-  
+  const details = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   await sendAlert('error', message, details);
 }

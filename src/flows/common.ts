@@ -313,6 +313,17 @@ export async function handleChat(
 }
 
 // ============================================================
+// AI COST PROTECTION
+// ============================================================
+
+const MAX_AI_CALLS_PER_CONVERSATION = 25;
+
+function checkAIBudget(conv: ConversationState): boolean {
+  conv.data._aiCallCount = (conv.data._aiCallCount || 0) + 1;
+  return conv.data._aiCallCount <= MAX_AI_CALLS_PER_CONVERSATION;
+}
+
+// ============================================================
 // AI CONVERSATION MODE
 // ============================================================
 
@@ -323,6 +334,15 @@ export async function handleAIConversation(
   features: ClientFeatures,
   accessToken: string
 ): Promise<void> {
+  if (!checkAIBudget(conv)) {
+    await sendWhatsAppMessage(
+      conv.phone,
+      'عذراً، تجاوزت حد المحادثة اليوم. تواصل مع فريقنا مباشرة للمساعدة. 🙏',
+      accessToken,
+      client.phone_number_id
+    );
+    return;
+  }
   const questions = client.questions?.length > 0
     ? client.questions.map((q: any, i: number) => ({
         text: q.text || q.question || `سؤال ${i + 1}`,
@@ -416,6 +436,16 @@ export async function handleAIFallback(
 ): Promise<void> {
   if (!isAIAvailable()) {
     console.warn('⚠️ AI not available, skipping fallback');
+    const fallback = 'عذراً، ما قدرت أجاوب الآن. فريقنا بيتواصل معك قريباً. 🙏';
+    await sendWhatsAppMessage(conv.phone, fallback, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: fallback });
+    return;
+  }
+
+  if (!checkAIBudget(conv)) {
+    const limitMsg = 'عذراً، تجاوزت حد المحادثة اليوم. تواصل مع فريقنا مباشرة للمساعدة. 🙏';
+    await sendWhatsAppMessage(conv.phone, limitMsg, accessToken, client.phone_number_id);
+    conv.messages.push({ role: 'assistant', content: limitMsg });
     return;
   }
 

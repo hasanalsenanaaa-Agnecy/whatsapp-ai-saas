@@ -204,21 +204,32 @@ export async function getAIResponse(
   }));
   recent.push({ role: 'user', content: userMessage });
 
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('AI timeout')), 15_000)
+  );
+
   try {
-    const response = await anthropic.messages.create({
-      model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
-      max_tokens: 400,
-      system: systemPrompt,
-      messages: recent
-    });
+    const response = await Promise.race([
+      anthropic.messages.create({
+        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+        max_tokens: 400,
+        system: systemPrompt,
+        messages: recent
+      }),
+      timeout
+    ]);
 
     const textBlock = response.content.find(b => b.type === 'text');
     const raw = textBlock?.type === 'text' ? textBlock.text : '';
     const parsed = parseAIResponse(raw);
 
     return { parsed, rawResponse: raw };
-  } catch (error) {
-    console.error('❌ AI conversation error:', error);
+  } catch (error: any) {
+    if (error?.message === 'AI timeout') {
+      console.error('❌ AI conversation timeout after 15s');
+    } else {
+      console.error('❌ AI conversation error:', error);
+    }
     return {
       parsed: { text: 'عذراً، صار خطأ. خليني أكمل معك.', data: {}, buttons: null, list: null, complete: false, handover: false },
       rawResponse: ''
