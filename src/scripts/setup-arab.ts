@@ -16,7 +16,12 @@ async function main() {
         shopify_domain: 'hsespd-dv.myshopify.com',
         currency: 'KWD',
         welcome_message: 'أهلاً وسهلاً في ARAB | عرب! 🛍️',
-        thank_you_message: 'شكراً لتسوقك من ARAB | عرب! 🙏'
+        thank_you_message: 'شكراً لتسوقك من ARAB | عرب! 🙏',
+        assistant_labels: {
+          best: 'هدية فاخرة',    // highest-priced = premium gift box
+          cheap: 'استخدام يومي', // cheapest = daily use / personal
+          type: 'كل المنتجات'   // browse all
+        }
       })}::jsonb,
       features = ${JSON.stringify({
         ai_fallback: true,

@@ -31,14 +31,18 @@ const SYSTEM_PROMPT = `أنت مسؤول مبيعات محترف لـ {businessN
 
 قواعد:
 1. رد بالعربي الخليجي — قصير ومباشر، جملة أو جملتين
-2. استخدم المعلومات المتوفرة أدناه للإجابة — إذا السؤال عن منتج موجود في القائمة، أجب بثقة عن سعره ومواصفاته
-3. لو السؤال عن شي مو موجود أبداً في المعلومات (مثل سياسة الإرجاع أو مواعيد التوصيل)، قل "خليني أحولك لفريقنا يساعدك"
-4. لا تخترع معلومات غير موجودة — بس لا تقول "ما عندي" إذا الجواب موجود في المنتجات
+2. استخدم المعلومات المتوفرة للإجابة بثقة عن الأسعار والمواصفات
+3. لو السؤال عن شي مو موجود في المعلومات (سياسة الإرجاع، مواعيد التوصيل)، قل "خليني أحولك لفريقنا يساعدك"
+4. لا تخترع معلومات — لكن لا تقول "ما عندي" إذا الجواب موجود في المنتجات
 5. لا تستخدم إيموجي
-6. إذا العميل يسأل عن أفضل منتج أو توصية، اذكر المنتجات المتوفرة وخل العميل يختار
+6. إذا كان العميل يشوف منتج معين الآن، ركّز جوابك عليه — قل "هذا المنتج..." بدل الكلام العام، وشجّعه إذا كان اختيار ممتاز
+7. إذا العميل يسأل عن الأكثر مبيعاً أو الأفضل ولا عندك بيانات مبيعات، اقترح الأغلى سعراً باعتباره الأكثر طلباً
 
-معلومات العمل والمنتجات:
+منتجات وتفاصيل العمل:
 {knowledgeBase}
+
+السياق الحالي — ماذا يفعل العميل الآن:
+{shoppingContext}
 
 معلومات العميل:
 {customerContext}`;
@@ -76,9 +80,43 @@ export async function generateKnowledgeResponse(
       ? knowledgeBase.map(k => `- ${k.category}: ${k.question}\n  الإجابة: ${k.answer}`).join('\n')
       : 'لا توجد معلومات إضافية متوفرة';
 
-    // Format customer context
+    // Build shopping context — what the customer is doing right now
+    const shoppingContextLines: string[] = [];
+    const selectedProduct = customerContext._selectedProduct;
+    const cart: any[] = customerContext._cart || [];
+
+    if (selectedProduct) {
+      let productLine = `العميل يشوف حالياً: ${selectedProduct.title}`;
+      if (selectedProduct.priceMin) productLine += ` — من ${selectedProduct.priceMin}`;
+      shoppingContextLines.push(productLine);
+
+      const availableVariants = (selectedProduct.variants || []).filter(
+        (v: any) => v.available && v.title !== 'Default Title'
+      );
+      if (availableVariants.length > 0) {
+        shoppingContextLines.push(
+          `الأنواع المتوفرة: ${availableVariants.map((v: any) => v.title).join('، ')}`
+        );
+      }
+    }
+
+    if (cart.length > 0) {
+      const cartText = cart.map((i: any) => {
+        let s = i.productTitle;
+        if (i.variantTitle && i.variantTitle !== 'Default Title') s += ` (${i.variantTitle})`;
+        if (i.quantity > 1) s += ` x${i.quantity}`;
+        return s;
+      }).join('، ');
+      shoppingContextLines.push(`في السلة: ${cartText}`);
+    }
+
+    const shoppingContext = shoppingContextLines.length > 0
+      ? shoppingContextLines.join('\n')
+      : 'العميل يتصفح المنتجات';
+
+    // Format customer context — skip internal _ keys and object values
     const contextText = Object.entries(customerContext)
-      .filter(([_, v]) => v)
+      .filter(([k, v]) => v && !k.startsWith('_') && typeof v !== 'object' && typeof v !== 'boolean')
       .map(([k, v]) => `${k}: ${v}`)
       .join('\n') || 'عميل جديد';
 
@@ -86,6 +124,7 @@ export async function generateKnowledgeResponse(
     const systemPrompt = SYSTEM_PROMPT
       .replace('{businessName}', businessName)
       .replace('{knowledgeBase}', kbText)
+      .replace('{shoppingContext}', shoppingContext)
       .replace('{customerContext}', contextText);
 
     // Prepare messages (last 6 messages for context)

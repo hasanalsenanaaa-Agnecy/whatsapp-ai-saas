@@ -305,8 +305,7 @@ export async function handleChat(
   if (features.ai_fallback && isAIAvailable()) {
     await handleAIFallback(client, conv, message, accessToken);
   } else {
-    const name = conv.data.name || '';
-    const fallbackMsg = `أهلاً ${name}! 👋\nمعلوماتك وصلتنا وفريقنا بيتواصل معك قريب.\nإذا تبي تتكلم مع أحد فريقنا، رد بـ "موظف" وبنحولك.`;
+    const fallbackMsg = formatMessage(_messages.chatFallback, { name: conv.data.name || '' });
     await sendWhatsAppMessage(conv.phone, fallbackMsg, accessToken, client.phone_number_id);
     conv.messages.push({ role: 'assistant', content: fallbackMsg });
   }

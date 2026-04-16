@@ -9,7 +9,9 @@ export interface ShopifyProduct {
   description: string;
   priceMin: string;
   priceMax: string;
+  compareAtPriceMin: string | null; // original price before discount, null if no sale
   imageUrl: string | null;
+  tags: string[];                   // merchant-set tags: 'best-seller', 'gift', 'new', etc.
   variants: ShopifyVariant[];
 }
 
@@ -17,6 +19,7 @@ export interface ShopifyVariant {
   id: string;
   title: string;
   price: string;
+  compareAtPrice: string | null;    // original price for this variant if on sale
   available: boolean;
 }
 
@@ -30,17 +33,22 @@ export interface ShopifyCheckout {
 // GRAPHQL QUERIES
 // ============================================================
 
+// sortKey defaults to BEST_SELLING so the order reflects real Shopify sales data
 const PRODUCTS_QUERY = `
-  query getProducts($first: Int!) {
-    products(first: $first) {
+  query getProducts($first: Int!, $sortKey: ProductSortKeys, $reverse: Boolean) {
+    products(first: $first, sortKey: $sortKey, reverse: $reverse) {
       edges {
         node {
           id
           title
           description
+          tags
           priceRange {
             minVariantPrice { amount currencyCode }
             maxVariantPrice { amount currencyCode }
+          }
+          compareAtPriceRange {
+            minVariantPrice { amount currencyCode }
           }
           images(first: 1) {
             edges { node { url } }
@@ -51,6 +59,7 @@ const PRODUCTS_QUERY = `
                 id
                 title
                 price { amount currencyCode }
+                compareAtPrice { amount currencyCode }
                 availableForSale
               }
             }
@@ -69,9 +78,13 @@ const SEARCH_PRODUCTS_QUERY = `
           id
           title
           description
+          tags
           priceRange {
             minVariantPrice { amount currencyCode }
             maxVariantPrice { amount currencyCode }
+          }
+          compareAtPriceRange {
+            minVariantPrice { amount currencyCode }
           }
           images(first: 1) {
             edges { node { url } }
@@ -82,6 +95,7 @@ const SEARCH_PRODUCTS_QUERY = `
                 id
                 title
                 price { amount currencyCode }
+                compareAtPrice { amount currencyCode }
                 availableForSale
               }
             }
@@ -98,9 +112,13 @@ const PRODUCT_BY_ID_QUERY = `
       id
       title
       description
+      tags
       priceRange {
         minVariantPrice { amount currencyCode }
         maxVariantPrice { amount currencyCode }
+      }
+      compareAtPriceRange {
+        minVariantPrice { amount currencyCode }
       }
       images(first: 1) {
         edges { node { url } }
@@ -111,6 +129,7 @@ const PRODUCT_BY_ID_QUERY = `
             id
             title
             price { amount currencyCode }
+            compareAtPrice { amount currencyCode }
             availableForSale
           }
         }
@@ -206,11 +225,19 @@ function parseProduct(node: Record<string, unknown>): ShopifyProduct {
     minVariantPrice: { amount: string; currencyCode: string };
     maxVariantPrice: { amount: string; currencyCode: string };
   };
+  const compareAtPriceRange = node.compareAtPriceRange as {
+    minVariantPrice: { amount: string; currencyCode: string } | null;
+  } | null;
   const images = node.images as { edges: { node: { url: string } }[] };
-  const variants = node.variants as { edges: { node: { id: string; title: string; price: { amount: string }; availableForSale: boolean } }[] };
+  const variants = node.variants as { edges: { node: { id: string; title: string; price: { amount: string }; compareAtPrice: { amount: string } | null; availableForSale: boolean } }[] };
+  const tags = (node.tags as string[]) || [];
 
   const priceMin = parseFloat(priceRange.minVariantPrice.amount).toFixed(2);
   const priceMax = parseFloat(priceRange.maxVariantPrice.amount).toFixed(2);
+  const compareAtRaw = compareAtPriceRange?.minVariantPrice?.amount;
+  const compareAtPriceMin = compareAtRaw && parseFloat(compareAtRaw) > parseFloat(priceMin)
+    ? parseFloat(compareAtRaw).toFixed(2)
+    : null;
 
   return {
     id: node.id as string,
@@ -218,13 +245,21 @@ function parseProduct(node: Record<string, unknown>): ShopifyProduct {
     description: (node.description as string) || '',
     priceMin,
     priceMax,
+    compareAtPriceMin,
     imageUrl: images.edges[0]?.node.url ?? null,
-    variants: variants.edges.map(e => ({
-      id: e.node.id,
-      title: e.node.title,
-      price: parseFloat(e.node.price.amount).toFixed(2),
-      available: e.node.availableForSale
-    }))
+    tags,
+    variants: variants.edges.map(e => {
+      const compareAt = e.node.compareAtPrice?.amount;
+      return {
+        id: e.node.id,
+        title: e.node.title,
+        price: parseFloat(e.node.price.amount).toFixed(2),
+        compareAtPrice: compareAt && parseFloat(compareAt) > parseFloat(e.node.price.amount)
+          ? parseFloat(compareAt).toFixed(2)
+          : null,
+        available: e.node.availableForSale
+      };
+    })
   };
 }
 
@@ -248,7 +283,8 @@ export function formatPriceSAR(amount: string | number): string {
 // ============================================================
 
 /**
- * Fetch products from Shopify store (up to 20 by default)
+ * Fetch products from Shopify store sorted by best-selling (Shopify's real sales rank).
+ * The first product returned is the actual best seller — no guessing.
  */
 export async function fetchProducts(
   shopifyDomain: string,
@@ -256,7 +292,11 @@ export async function fetchProducts(
   limit = 20
 ): Promise<ShopifyProduct[]> {
   try {
-    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, PRODUCTS_QUERY, { first: limit }) as {
+    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, PRODUCTS_QUERY, {
+      first: limit,
+      sortKey: 'BEST_SELLING',
+      reverse: false
+    }) as {
       products: { edges: { node: Record<string, unknown> }[] };
     };
     return data.products.edges.map(e => parseProduct(e.node));

@@ -11,19 +11,20 @@ export interface Question {
 
 export interface ClientMessages {
   welcome: string;
-  welcomeButtons?: { id: string; title: string }[];
   askName: string;
   questions: Question[];
   thankYou: string;
-  thankYouWithAppointment: string;  // NEW: When appointment is booked
+  thankYouWithAppointment: string;
   invalidInput: string;
   agentNotification: string;
-  appointmentNotification: string;  // NEW: Separate appointment notification
+  appointmentNotification: string;
   // Appointment flow messages
   askAppointmentDate: string;
   askAppointmentTime: string;
   appointmentConfirmed: string;
   appointmentReminder: string;
+  // Post-completion chat fallback (shown when AI is off and customer messages after completing flow)
+  chatFallback: string;
   // Handover messages
   handoverDetected: string;
   handoverAgentNotification: string;
@@ -89,8 +90,11 @@ wa.me/{whatsapp}`,
 بنرسل لك تذكير قبل الموعد.`,
   appointmentReminder: `مرحبا {name}! 👋
 
-تذكير بموعدك اليوم {appointmentTime}.
+تذكير بموعدك اليوم {appointmentTime} في {businessName}.
 نتطلع لخدمتك! ✨`,
+  chatFallback: `أهلاً {name}! 👋
+تم استلام معلوماتك وأحد المستشارين سيتواصل معك قريباً.
+إذا كان عندك استفسار عاجل، رد بـ "موظف".`,
   handoverDetected: `فهمت! خليني أحولك لأحد المستشارين.
 بيتواصل معك في أقرب وقت. 🙏`,
   handoverAgentNotification: `🔴 *طلب تحويل!*
@@ -165,6 +169,9 @@ wa.me/{whatsapp}`,
 
 تذكير بموعدك اليوم {appointmentTime} في {businessName}.
 نتطلع لخدمتك! ✨`,
+  chatFallback: `أهلاً {name}! 👋
+تم استلام معلوماتك وفريق الاستقبال سيتواصل معك قريباً.
+إذا كان عندك استفسار عاجل، رد بـ "موظف".`,
   handoverDetected: `فهمت! خليني أحولك للاستقبال.
 بيتواصلون معك في أقرب وقت. 🙏`,
   handoverAgentNotification: `🔴 *طلب تحويل!*
@@ -239,8 +246,11 @@ wa.me/{whatsapp}`,
 بنرسل لك تذكير قبل الموعد.`,
   appointmentReminder: `مرحبا {name}! 👋
 
-تذكير بموعدك اليوم {appointmentTime}.
+تذكير بموعدك اليوم {appointmentTime} في {businessName}.
 نتطلع لخدمتك! ✨`,
+  chatFallback: `أهلاً {name}! 👋
+تم استلام معلوماتك وأحد المستشارين سيتواصل معك قريباً.
+إذا كان عندك استفسار عاجل، رد بـ "موظف".`,
   handoverDetected: `فهمت! خليني أحولك لأحد المستشارين.
 بيتواصل معك في أقرب وقت. 🙏`,
   handoverAgentNotification: `🔴 *طلب تحويل!*
@@ -264,7 +274,7 @@ export const GENERIC_MESSAGES: ClientMessages = {
 وش اسمك الكريم؟`,
   askName: 'وش اسمك الكريم؟',
   questions: [
-    { text: 'كيف أقدر أساعدك؟', options: ['استفسار', 'طلب خدمة', 'شكوى'], field: 'interest' }
+    { text: 'كيف أقدر أساعدك؟', options: ['استفسار', 'طلب خدمة', 'تواصل معنا'], field: 'interest' }
   ],
   thankYou: `تمام يا {name}! ✅
 
@@ -309,8 +319,11 @@ wa.me/{whatsapp}`,
 بنرسل لك تذكير قبل الموعد.`,
   appointmentReminder: `مرحبا {name}! 👋
 
-تذكير بموعدك اليوم {appointmentTime}.
+تذكير بموعدك اليوم {appointmentTime} في {businessName}.
 نتطلع لخدمتك! ✨`,
+  chatFallback: `أهلاً {name}! 👋
+تم استلام معلوماتك وفريقنا سيتواصل معك قريباً.
+إذا كان عندك استفسار عاجل، رد بـ "موظف".`,
   handoverDetected: `فهمت! خليني أحولك لأحد الموظفين.
 بيتواصل معك في أقرب وقت. 🙏`,
   handoverAgentNotification: `🔴 *طلب تحويل!*
@@ -327,30 +340,35 @@ wa.me/{whatsapp}`
 
 // ============================================================
 // SHOPIFY / E-COMMERCE MESSAGES
+// Used as fallback if a shopify client has no Shopify config
+// and falls through to the standard flow.
+// The dedicated shopify bot (shopify-agent.ts) has its own
+// inline messages and does not read these.
 // ============================================================
 export const SHOPIFY_MESSAGES: ClientMessages = {
   welcome: `مرحباً بك في {businessName}! 🛍️
 
-عندنا أحلى المنتجات! وش تبي تسوي؟`,
-  askName: 'قبل نبدأ، ممكن اسمك الكريم؟ 😊',
+وش اسمك الكريم؟`,
+  askName: 'وش اسمك الكريم؟',
   questions: [
-    { text: 'كيف نقدر نساعدك؟', options: ['تصفح المنتجات', 'البحث عن منتج', 'متابعة طلب', 'تكلم مع موظف'], field: 'intent' }
+    { text: 'كيف نقدر نساعدك؟', options: ['تصفح المنتجات', 'متابعة طلب', 'تكلم مع موظف'], field: 'intent' }
   ],
   thankYou: `شكراً لتسوقك من {businessName}! 🙏
 نتمنى تعجبك المنتجات ❤️`,
   thankYouWithAppointment: `شكراً لتسوقك من {businessName}! 🙏
 نتمنى تعجبك المنتجات ❤️`,
   invalidInput: 'اختر من الخيارات المتاحة 👆',
-  agentNotification: `🛒 *طلب جديد!*
+  agentNotification: `🛒 *عميل جديد!*
 
 👤 {name}
 📱 {phone}
-💬 wa.me/{whatsapp}
 
-📦 المنتج: {productName}
-💰 المبلغ: {price} ريال
-🔗 رابط الدفع: {checkoutUrl}
-⏰ {time}`,
+📋 التفاصيل:
+{details}
+
+⏰ {time}
+
+wa.me/{whatsapp}`,
   appointmentNotification: `📅 *موعد جديد!*
 
 👤 {name}
@@ -370,8 +388,11 @@ wa.me/{whatsapp}`,
 بنرسل لك تذكير قبل الموعد.`,
   appointmentReminder: `مرحبا {name}! 👋
 
-تذكير بموعدك اليوم {appointmentTime}.
+تذكير بموعدك اليوم {appointmentTime} في {businessName}.
 نتطلع لخدمتك! ✨`,
+  chatFallback: `أهلاً {name}! 👋
+طلبك وصلنا وفريقنا على اطلاع.
+إذا تحتاج مساعدة، رد بـ "موظف".`,
   handoverDetected: `فهمت! خليني أحولك لأحد الموظفين.
 بيتواصل معك في أقرب وقت. 🙏`,
   handoverAgentNotification: `🔴 *طلب تحويل!*
@@ -387,44 +408,12 @@ wa.me/{whatsapp}`
 };
 
 // ============================================================
-// SHOPIFY-SPECIFIC EXTRA MESSAGES (not part of ClientMessages)
-// ============================================================
-export const SHOPIFY_EXTRA_MESSAGES = {
-  productList: 'تفضل منتجاتنا المتوفرة: 👇',
-  productDetails: `📦 *{productName}*
-💰 السعر: {price} ريال
-
-{description}`,
-  checkoutLink: `تفضل رابط الدفع 💳
-{checkoutUrl}
-
-بعد ما تدفع، راح نأكد طلبك ✅`,
-  orderConfirmed: `تم تأكيد طلبك بنجاح! ✅
-
-شكراً {name}! بنتواصل معك لتوصيل الطلب 📦`,
-  paymentConfirmation: `✅ *تم الدفع!*
-
-👤 {name}
-📱 {phone}
-📦 المنتج: {productName}
-💰 المبلغ: {price} ريال
-⏰ {time}`,
-  searchPrompt: 'وش تبي تبحث عنه؟ 🔍',
-  noProducts: 'ما لقينا منتجات حالياً. تبي تتكلم مع موظف؟',
-  noSearchResults: 'ما لقينا نتائج لبحثك. جرب كلمة ثانية أو تصفح كل المنتجات.',
-  orderButton: 'اطلب الحين',
-  confirmPaymentButton: 'تأكيد الدفع',
-  browseButton: 'تصفح المنتجات',
-  apiError: 'عذراً، صار خطأ في النظام. حاول مرة ثانية أو تكلم مع موظف.'
-};
-
-// ============================================================
 // HELPER FUNCTIONS
 // ============================================================
 
 export function getDefaultMessages(industry: string): ClientMessages {
   switch (industry) {
-    case 'real_estate': 
+    case 'real_estate':
       return REAL_ESTATE_MESSAGES;
     case 'clinic':
     case 'medical':
@@ -439,7 +428,7 @@ export function getDefaultMessages(industry: string): ClientMessages {
     case 'ecommerce':
     case 'e-commerce':
       return SHOPIFY_MESSAGES;
-    default: 
+    default:
       return GENERIC_MESSAGES;
   }
 }
