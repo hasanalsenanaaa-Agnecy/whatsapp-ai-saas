@@ -106,7 +106,7 @@ export async function handleShopifyAgent(
   }
 
   // AI answering — intercept product questions at browsing/post-sale states
-  const aiStates = ['catalog', 'image_browse', 'product_view', 'cart', 'cart_add', 'order_complete', 'done'];
+  const aiStates = ['catalog', 'image_browse', 'product_view', 'cart', 'cart_add', 'awaiting_payment', 'order_complete', 'done'];
   if (!isButtonId && aiStates.includes(shopifyState) && looksLikeQuestion(message)) {
     const answered = await handleProductQuestion(client, conv, config, message, accessToken);
     if (answered) return;
@@ -750,8 +750,25 @@ async function handleOrderComplete(
     return;
   }
 
-  // Urgent — cancel, complaint, order status
-  const urgentKeywords = ['الغ', 'الغاء', 'ألغي', 'مشكلة', 'شكوى', 'وين طلبي'];
+  // Help category text (typed or button)
+  if (lower === 'help_order_status' || lower.includes('حالة الطلب') || lower.includes('وين طلبي') || lower.includes('تتبع')) {
+    await sendWhatsAppMessage(conv.phone, 'تم تسجيل طلبك. فريقنا بيتواصل معك بتحديث قريب.', accessToken, client.phone_number_id);
+    await notifyOwner(client, conv, config, 'urgent', accessToken);
+    return;
+  }
+  if (lower === 'help_returns' || lower.includes('استرجاع') || lower.includes('تبديل') || lower.includes('ارجاع')) {
+    await sendWhatsAppMessage(conv.phone, 'تم تسجيل طلبك. فريقنا بيتواصل معك بخصوص الاسترجاع.', accessToken, client.phone_number_id);
+    await notifyOwner(client, conv, config, 'urgent', accessToken);
+    return;
+  }
+  if (lower === 'help_agent' || lower.includes('تكلم مع موظف') || lower.includes('كلم موظف')) {
+    await sendWhatsAppMessage(conv.phone, 'فريقنا بيتواصل معك خلال دقائق.', accessToken, client.phone_number_id);
+    await notifyOwner(client, conv, config, 'urgent', accessToken);
+    return;
+  }
+
+  // Urgent — cancel, complaint, delay
+  const urgentKeywords = ['الغ', 'الغاء', 'ألغي', 'مشكلة', 'شكوى', 'تاخر', 'تأخر', 'ما وصل', 'لم يصل'];
   if (urgentKeywords.some(k => lower.includes(k))) {
     await sendWhatsAppMessage(conv.phone, 'تم تسجيل طلبك. فريقنا بيتواصل معك قريب.', accessToken, client.phone_number_id);
     await notifyOwner(client, conv, config, 'urgent', accessToken);
@@ -828,25 +845,25 @@ async function handleDone(
     return;
   }
 
-  // Help category buttons from showHelpMenu
-  if (lower === 'help_order_status') {
+  // Help category buttons (ID or typed text)
+  if (lower === 'help_order_status' || lower.includes('حالة الطلب') || lower.includes('وين طلبي') || lower.includes('تتبع')) {
     await sendWhatsAppMessage(conv.phone, 'تم تسجيل طلبك. فريقنا بيتواصل معك بتحديث قريب.', accessToken, client.phone_number_id);
     await notifyOwner(client, conv, config, 'urgent', accessToken);
     return;
   }
-  if (lower === 'help_returns') {
+  if (lower === 'help_returns' || lower.includes('استرجاع') || lower.includes('تبديل') || lower.includes('ارجاع')) {
     await sendWhatsAppMessage(conv.phone, 'تم تسجيل طلبك. فريقنا بيتواصل معك بخصوص الاسترجاع.', accessToken, client.phone_number_id);
     await notifyOwner(client, conv, config, 'urgent', accessToken);
     return;
   }
-  if (lower === 'help_agent') {
+  if (lower === 'help_agent' || lower.includes('تكلم مع موظف') || lower.includes('كلم موظف')) {
     await sendWhatsAppMessage(conv.phone, 'فريقنا بيتواصل معك خلال دقائق.', accessToken, client.phone_number_id);
     await notifyOwner(client, conv, config, 'urgent', accessToken);
     return;
   }
 
   // Urgent keywords — forward to agent
-  const urgentKeywords = ['الغ', 'الغاء', 'مشكلة', 'شكوى', 'وين طلبي'];
+  const urgentKeywords = ['الغ', 'الغاء', 'مشكلة', 'شكوى', 'تاخر', 'تأخر', 'ما وصل', 'لم يصل'];
   if (urgentKeywords.some(k => lower.includes(k))) {
     await sendWhatsAppMessage(conv.phone, 'تم تسجيل طلبك. فريقنا بيتواصل معك قريب.', accessToken, client.phone_number_id);
     await notifyOwner(client, conv, config, 'urgent', accessToken);
@@ -1327,7 +1344,7 @@ ${cartText || '-'}
 ${cartText || '📦 آخر طلب: -'}
 💰 ${price}${historyText}
 
-آخر رسالة: ${conv.messages[conv.messages.length - 1]?.content || '-'}
+آخر رسالة: ${[...conv.messages].reverse().find(m => m.role === 'user')?.content || '-'}
 
 ⏰ ${time}`;
   }
@@ -1536,7 +1553,7 @@ async function askQuantity(
 ): Promise<void> {
   await sendWhatsAppButtons(
     conv.phone,
-    `*${productLabel}*\n\nكم الكمية؟`,
+    `*${productLabel}*\n\nكم الكمية؟\n_(أو اكتب أي رقم)_`,
     [
       { id: 'qty_1', title: '1' },
       { id: 'qty_2', title: '2' },
