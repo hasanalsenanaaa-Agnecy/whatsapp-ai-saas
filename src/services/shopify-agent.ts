@@ -5,6 +5,7 @@
 // Works with tokenless Shopify Storefront API.
 // ============================================================
 
+import Anthropic from '@anthropic-ai/sdk';
 import {
   fetchProducts,
   createCheckout,
@@ -19,9 +20,18 @@ import {
   sendWhatsAppList
 } from './whatsapp.js';
 import { createLead as _createLead } from './database.js'; // kept for future use; lead creation on payment is handled by shopify-webhook.ts
-// knowledge.ts is used for Shopify Admin data processing (future integration)
-// No AI conversational responses in the ecommerce flow — all answers are scripted or data-driven
 import { smartTitle, truncate, normalizeArabicNumbers } from '../utils/buttons.js';
+
+// ============================================================
+// MODULE-LEVEL: PRODUCT CACHE + ANTHROPIC CLIENT
+// ============================================================
+
+const _productCache = new Map<string, { products: ShopifyProduct[]; fetchedAt: number }>();
+const PRODUCT_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+const _anthropic = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
 
 // ============================================================
 // TYPES
@@ -53,6 +63,137 @@ interface CartItem {
   variantTitle: string;
   price: string;
   quantity: number;
+}
+
+// ============================================================
+// PRODUCT CACHE — fetch once per store, reuse for 15 min
+// ============================================================
+
+async function fetchProductsCached(domain: string, storefrontToken?: string): Promise<ShopifyProduct[]> {
+  const cached = _productCache.get(domain);
+  if (cached && Date.now() - cached.fetchedAt < PRODUCT_CACHE_TTL_MS) {
+    return cached.products;
+  }
+  const products = await fetchProducts(domain, storefrontToken, 10);
+  _productCache.set(domain, { products, fetchedAt: Date.now() });
+  return products;
+}
+
+// ============================================================
+// AI QUESTION ANSWERING — bounded, product-scoped
+// Max AI_QUESTION_BUDGET answers per session. After budget:
+// notify owner + nudge to product list.
+// ============================================================
+
+const AI_QUESTION_BUDGET = 2;
+
+function isQuestionMessage(message: string): boolean {
+  const lower = message.toLowerCase().trim();
+  if (lower.includes('؟') || lower.includes('?')) return true;
+  const starters = ['وش', 'شو', 'ايش', 'إيش', 'كيف', 'متى', 'وين', 'ليش', 'لش', 'هل',
+    'ممكن', 'فيه', 'عندكم', 'عندك', 'تقدر', 'اقدر', 'كم', 'بكم',
+    'مبيعا', 'مبيعاً', 'افضل', 'أفضل', 'الافضل', 'ارخص', 'أرخص', 'استفسار'];
+  return starters.some(w => lower.startsWith(w) || lower.includes(' ' + w));
+}
+
+async function answerWithAI(
+  question: string,
+  products: ShopifyProduct[],
+  storeName: string,
+  currency: string | undefined,
+  history: { role: string; content: string }[]
+): Promise<string | null> {
+  if (!_anthropic) return null;
+
+  const productList = products.map(p => {
+    const price = formatPrice(p.priceMin, currency);
+    const desc = p.description ? p.description.replace(/<[^>]*>/g, '').trim().substring(0, 80) : '';
+    return `- ${p.title} (${price})${desc ? ': ' + desc : ''}`;
+  }).join('\n');
+
+  const system = `أنت مساعد متجر ${storeName} على واتساب.
+أجب على سؤال العميل فقط من معلومات المنتجات المتاحة.
+لهجة خليجية قصيرة — جملة أو جملتين كحد أقصى.
+لا تقترح الشراء مباشرة ولا تذكر أسعار إلا إذا سأل عنها.
+إذا السؤال خارج نطاق المنتجات، قل "ما عندي تفاصيل عن هذا، بس تقدر تتصفح منتجاتنا."
+
+المنتجات:
+${productList}`;
+
+  try {
+    const recent = history.slice(-6).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+    recent.push({ role: 'user', content: question });
+
+    const response = await Promise.race([
+      _anthropic.messages.create({
+        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+        max_tokens: 150,
+        system,
+        messages: recent
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10_000))
+    ]);
+
+    const block = (response as any).content?.find((b: any) => b.type === 'text');
+    return block?.text?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function tryAIAnswer(
+  client: any,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  message: string,
+  accessToken: string
+): Promise<boolean> {
+  if (!isQuestionMessage(message)) return false;
+
+  const count = conv.data._aiAnswerCount || 0;
+
+  if (count >= AI_QUESTION_BUDGET) {
+    // Budget exhausted — show CTA every time (not just once) so customer isn't left in silence
+    await sendWhatsAppButtons(
+      conv.phone,
+      'للمزيد من الاستفسارات، فريقنا بخدمتك 👇',
+      [
+        { id: 'pick_direct', title: 'تصفح المنتجات' },
+        { id: 'contact_us_global', title: 'تواصل مع فريقنا' }
+      ],
+      accessToken,
+      client.phone_number_id
+    );
+    // Notify owner only once
+    if (!conv.data._aiExhaustedNotified) {
+      conv.data._aiExhaustedNotified = true;
+      await notifyOwner(client, conv, config, 'help', accessToken);
+    }
+    return true;
+  }
+
+  const products: ShopifyProduct[] = conv.data._products || [];
+  const answer = await answerWithAI(message, products, config.storeName, config.currency, conv.messages);
+  if (!answer) return false;
+
+  conv.data._aiAnswerCount = count + 1;
+  await sendWhatsAppMessage(conv.phone, answer, accessToken, client.phone_number_id);
+
+  // First answer only — soft CTA to browse
+  if (count === 0) {
+    await sendWhatsAppButtons(
+      conv.phone,
+      'تبي تتصفح المنتجات؟',
+      [
+        { id: 'pick_direct', title: 'قائمة المنتجات' },
+        { id: 'show_images', title: 'شوف الصور' }
+      ],
+      accessToken,
+      client.phone_number_id
+    );
+  }
+
+  return true;
 }
 
 // ============================================================
@@ -102,6 +243,12 @@ export async function handleShopifyAgent(
     if ((lower === 'view_cart' || lower === 'سلة' || lower === 'cart') && conv.data._cart.length > 0) {
       conv.data._shopifyState = 'cart';
       await showCart(client, conv, config, accessToken);
+      return;
+    }
+    // Global contact us — works from any state
+    if (lower === 'contact_us_global' || lower === 'contact_us') {
+      await sendWhatsAppMessage(conv.phone, 'سيتواصل معك فريقنا قريباً.', accessToken, client.phone_number_id);
+      await notifyOwner(client, conv, config, 'help', accessToken);
       return;
     }
   }
@@ -174,9 +321,10 @@ async function handleWelcome(
     }
 
     // Validate the name they just sent
+    // Note: "هلا" removed — it's a valid Saudi female name
     const nameInput = message.trim();
     const nameLower = nameInput.toLowerCase();
-    const greetings = ['hi', 'hello', 'مرحبا', 'مرحبه', 'اهلا', 'أهلا', 'سلام', 'هلا', 'هلو', 'السلام', 'هاي'];
+    const greetings = ['hi', 'hello', 'مرحبا', 'مرحبه', 'اهلا', 'أهلا', 'سلام', 'هلو', 'السلام', 'هاي', 'مرحبا'];
     if (
       nameInput.length < 2 ||
       /^\d+$/.test(normalizeArabicNumbers(nameLower)) ||
@@ -207,6 +355,7 @@ async function handleWelcome(
     ) {
       conv.data._cart = [];
       resetCurrentOrder(conv);
+      await sendWhatsAppMessage(conv.phone, 'تم مسح السلة ✓', accessToken, client.phone_number_id);
       // Fall through to browse entry
     } else {
       // First time hitting welcome with existing cart — show what's in it, ask to continue
@@ -234,8 +383,8 @@ async function handleWelcome(
     }
   }
 
-  // STEP 3: Fetch products
-  const products = await fetchProducts(config.domain, config.storefrontToken, 10);
+  // STEP 3: Fetch products (cached per store, 15 min TTL)
+  const products = await fetchProductsCached(config.domain, config.storefrontToken);
 
   if (products.length === 0) {
     await sendWhatsAppMessage(
@@ -256,13 +405,21 @@ async function handleWelcome(
     priceMin: p.priceMin,
     priceMax: p.priceMax,
     imageUrl: p.imageUrl,
-    variants: p.variants
+    variants: p.variants,
+    tags: p.tags,
+    compareAtPriceMin: p.compareAtPriceMin
   }));
+
+  // Returning customer greeting (name already known, new order started)
+  const isReturning = conv.data._orderHistory?.length > 0;
+  const nameGreet = isReturning
+    ? `أهلاً مجدداً يا *${conv.data.name}*! 👋\n\n`
+    : '';
 
   // ENTRY — two browse modes
   await sendWhatsAppButtons(
     conv.phone,
-    `كيف تبي تتصفح *${config.storeName}*؟`,
+    `${nameGreet}كيف تبي تتصفح *${config.storeName}* يا ${conv.data.name}؟`,
     [
       { id: 'show_images', title: 'شوف الصور' },
       { id: 'pick_direct', title: 'قائمة المنتجات' }
@@ -302,7 +459,13 @@ async function handleBrowseChoice(
     return;
   }
 
-  // Pattern-based product question — navigate directly to matched product
+  // If it looks like a question, try AI first so they get a text answer, not a product card
+  if (isQuestionMessage(message)) {
+    const aiHandled = await tryAIAnswer(client, conv, config, message, accessToken);
+    if (aiHandled) return;
+  }
+
+  // Pattern-based product navigation (non-question intent: "الأرخص", "الأفضل" as nav, not inquiry)
   const questionMatch = tryAnswerProductQuestion(message, products, config.currency);
   if (questionMatch) {
     conv.data._reprompted = null;
@@ -312,11 +475,16 @@ async function handleBrowseChoice(
     return;
   }
 
+  // Non-question unmatched — try AI as fallback before reprompt/silence
+  const aiHandled = await tryAIAnswer(client, conv, config, message, accessToken);
+  if (aiHandled) return;
+
   // Reprompt once then silence
   if (shouldSilence(conv)) return;
+  const repromptName = conv.data.name ? ` يا ${conv.data.name}` : '';
   await sendWhatsAppButtons(
     conv.phone,
-    `كيف تبي تتصفح *${config.storeName}*؟`,
+    `كيف تبي تتصفح *${config.storeName}*${repromptName}؟`,
     [
       { id: 'show_images', title: 'شوف الصور' },
       { id: 'pick_direct', title: 'قائمة المنتجات' }
@@ -344,6 +512,8 @@ async function handleImageBrowse(
   if (!selected) selected = tryAnswerProductQuestion(message, products, config.currency);
 
   if (!selected) {
+    const aiHandled = await tryAIAnswer(client, conv, config, message, accessToken);
+    if (aiHandled) return;
     if (shouldSilence(conv)) return;
     await showProductNames(client, conv, config, accessToken);
     markReprompted(conv);
@@ -389,6 +559,8 @@ async function handleCatalogSelection(
   }
 
   if (!selected) {
+    const aiHandled = await tryAIAnswer(client, conv, config, message, accessToken);
+    if (aiHandled) return;
     if (shouldSilence(conv)) return;
     await showProductList(client, conv, config, accessToken);
     markReprompted(conv);
@@ -413,6 +585,12 @@ async function handleProductView(
 ): Promise<void> {
   const trimmed = message.trim();
   const product: ShopifyProduct = conv.data._selectedProduct;
+
+  if (!product) {
+    // Stale state (e.g. server restart) — recover by showing product list
+    await showProductList(client, conv, config, accessToken);
+    return;
+  }
 
   if (trimmed === 'add_to_cart') {
     // Check if product has multiple variants
@@ -448,6 +626,8 @@ async function handleProductView(
       // Single variant — go to quantity selection
       const variant = availableVariants[0] || product.variants[0];
       conv.data._selectedVariant = variant;
+      conv.data._selectedVariantId = variant?.id;
+      conv.data._selectedVariantTitle = variant?.title;
       await askQuantity(client, conv, config, accessToken, product.title);
     }
     return;
@@ -499,6 +679,8 @@ async function handleVariantSelect(
   }
 
   conv.data._selectedVariant = variant;
+  conv.data._selectedVariantId = variant.id;
+  conv.data._selectedVariantTitle = variant.title;
   const label = variant.title !== 'Default Title'
     ? `${product.title} — ${variant.title}`
     : product.title;
@@ -528,12 +710,21 @@ async function handleQuantitySelect(
     qty = parseInt(normalized);
   }
 
-  if (isNaN(qty) || qty < 1 || qty > 99) {
+  const MAX_QTY = 20;
+  if (isNaN(qty) || qty < 1) {
     await sendWhatsAppMessage(conv.phone, 'اكتب رقم الكمية (مثال: 1، 2، 3)', accessToken, client.phone_number_id);
+    return;
+  }
+  if (qty > MAX_QTY) {
+    await sendWhatsAppMessage(conv.phone, `الحد الأقصى ${MAX_QTY} قطعة. اكتب كمية أقل.`, accessToken, client.phone_number_id);
     return;
   }
 
   const product: ShopifyProduct = conv.data._selectedProduct;
+  if (!product) {
+    await showProductList(client, conv, config, accessToken);
+    return;
+  }
   const variant = conv.data._selectedVariant || product.variants[0];
 
   // Add to cart with quantity
@@ -577,7 +768,9 @@ async function handleCart(
   const lower = message.toLowerCase().trim();
 
   // Add more products
-  if (lower === 'add_more' || lower.includes('أضف') || lower.includes('ضيف') || lower.includes('زيد') || lower.includes('تسوق')) {
+  if (lower === 'add_more' || lower === 'تسوق' || lower === 'تسوق أكثر'
+    || lower.includes('أضف منتج') || lower.includes('ضيف منتج') || lower.includes('زيد منتج')
+    || lower.includes('أضف أكثر') || lower.includes('تسوق أكثر')) {
     const browseMode = conv.data._browseMode || 'list';
     if (browseMode === 'image') {
       await showProductNames(client, conv, config, accessToken);
@@ -609,6 +802,10 @@ async function handleCart(
     await showCart(client, conv, config, accessToken);
     return;
   }
+
+  // Try AI answer (product questions mid-cart) before reprompt
+  const aiHandled = await tryAIAnswer(client, conv, config, message, accessToken);
+  if (aiHandled) return;
 
   // Didn't understand — reprompt once then silence
   if (shouldSilence(conv)) return;
@@ -670,8 +867,7 @@ async function handleCartRemove(
 // ============================================================
 // STATE: AWAITING_PAYMENT
 // Webhook (orders/paid) handles real verification.
-// Self-report only acknowledges. Help → ask once → notify owner.
-// Re-show payment link once → second problem → notify owner + silence.
+// After self-report: escape via cancel, help still works, 2h timeout recovery.
 // ============================================================
 
 async function handlePaymentConfirmation(
@@ -683,18 +879,78 @@ async function handlePaymentConfirmation(
 ): Promise<void> {
   const lower = message.toLowerCase().trim();
   const checkoutUrl = conv.data._checkout?.url;
+  const name = conv.data.name ? ` يا ${conv.data.name}` : '';
 
-  // Already self-reported — hold until webhook fires, silence repeat messages
-  if (conv.data._paymentSelfReported) return;
+  // GLOBAL ESCAPE — cancel/waqf at any point resets the order
+  const isCancelIntent = ['وقف', 'cancel', 'الغ', 'إلغاء', 'الغاء', 'مو عارف', 'بكره'].some(w => lower.includes(w));
+  if (isCancelIntent) {
+    resetCurrentOrder(conv);
+    conv.data._shopifyState = 'welcome';
+    await sendWhatsAppMessage(conv.phone, `تم إلغاء الطلب${name}. تقدر تبدأ من جديد في أي وقت.`, accessToken, client.phone_number_id);
+    await handleWelcome(client, conv, config, message, accessToken);
+    return;
+  }
+
+  // After self-report: 2h timeout check + limited handling
+  if (conv.data._paymentSelfReported) {
+    const reportedAt = conv.data._paymentReportedAt ? new Date(conv.data._paymentReportedAt).getTime() : 0;
+    const hoursSinceReport = (Date.now() - reportedAt) / (1000 * 60 * 60);
+
+    // 2h passed with no webhook — offer recovery
+    if (hoursSinceReport >= 2 && !conv.data._timeoutRecoveryOffered) {
+      conv.data._timeoutRecoveryOffered = true;
+      await sendWhatsAppButtons(
+        conv.phone,
+        `يبدو إن التحقق تأخر${name}. تبي تطلب من جديد؟`,
+        [
+          { id: 'new_order', title: 'طلب جديد' },
+          { id: 'contact_us_global', title: 'تواصل مع فريقنا' }
+        ],
+        accessToken,
+        client.phone_number_id
+      );
+      await notifyOwner(client, conv, config, 'urgent', accessToken);
+      return;
+    }
+
+    // Process help message if they described their problem (must check before help button)
+    if (conv.data._awaitingHelpMessage) {
+      conv.data._awaitingHelpMessage = false;
+      await sendWhatsAppMessage(conv.phone, `سيتواصل معك فريقنا قريباً${name}.`, accessToken, client.phone_number_id);
+      await notifyOwner(client, conv, config, 'help', accessToken);
+      return;
+    }
+
+    // Help still works after self-report
+    if (lower === 'paid_help' || lower.includes('مساعدة') || lower.includes('موظف')) {
+      await sendWhatsAppMessage(conv.phone, 'وش المشكلة؟', accessToken, client.phone_number_id);
+      conv.data._awaitingHelpMessage = true;
+      return;
+    }
+
+    // New order button from timeout recovery
+    if (lower === 'new_order' || lower.includes('طلب جديد')) {
+      pushCurrentOrderToHistory(conv);
+      resetCurrentOrder(conv);
+      conv.data._shopifyState = 'welcome';
+      await handleWelcome(client, conv, config, message, accessToken);
+      return;
+    }
+
+    // Everything else after self-report — soft reminder once, then silence
+    if (!conv.data._postReportReminderSent) {
+      conv.data._postReportReminderSent = true;
+      await sendWhatsAppMessage(conv.phone, `جاري التحقق من دفعتك${name}، بنرسل لك تأكيد قريباً ✅`, accessToken, client.phone_number_id);
+    }
+    return;
+  }
 
   // Customer wrote what they need help with → scripted response + notify owner + silence
   if (conv.data._awaitingHelpMessage) {
     conv.data._awaitingHelpMessage = false;
-    const name = conv.data.name || '';
-    const helpResponse = `سيتواصل معك فريقنا قريباً${name ? ' يا ' + name : ''}.`;
-    await sendWhatsAppMessage(conv.phone, helpResponse, accessToken, client.phone_number_id);
+    await sendWhatsAppMessage(conv.phone, `سيتواصل معك فريقنا قريباً${name}.`, accessToken, client.phone_number_id);
     await notifyOwner(client, conv, config, 'help', accessToken);
-    markReprompted(conv); // silence any further messages
+    markReprompted(conv);
     return;
   }
 
@@ -712,7 +968,6 @@ async function handlePaymentConfirmation(
   if (isPaid) {
     conv.data._paymentSelfReported = true;
     conv.data._paymentReportedAt = new Date().toISOString();
-    const name = conv.data.name ? ` يا ${conv.data.name}` : '';
     await sendWhatsAppMessage(
       conv.phone,
       `شكراً${name}! 🔄 جاري التحقق من دفعتك، بنرسل لك تأكيد خلال لحظات.`,
@@ -725,7 +980,7 @@ async function handlePaymentConfirmation(
 
   // Unrecognized — re-show payment link once, second time notify owner + silence
   if (conv.data._paymentLinkReshown) {
-    await sendWhatsAppMessage(conv.phone, 'سيتواصل معك فريقنا قريباً.', accessToken, client.phone_number_id);
+    await sendWhatsAppMessage(conv.phone, `سيتواصل معك فريقنا قريباً${name}.`, accessToken, client.phone_number_id);
     await notifyOwner(client, conv, config, 'help', accessToken);
     markReprompted(conv);
     return;
@@ -784,6 +1039,14 @@ async function handleOrderComplete(
     await sendWhatsAppMessage(conv.phone, 'سيتواصل معك فريقنا قريباً.', accessToken, client.phone_number_id);
     await notifyOwner(client, conv, config, 'urgent', accessToken);
     markReprompted(conv);
+    return;
+  }
+
+  // Gratitude — acknowledge warmly, once
+  if ((lower.includes('شكر') || lower.includes('شكراً') || lower.includes('مشكور') || lower.includes('thanks') || lower === '🙏') && !conv.data._gratitudeAcked) {
+    conv.data._gratitudeAcked = true;
+    const name = conv.data.name ? ` يا ${conv.data.name}` : '';
+    await sendWhatsAppMessage(conv.phone, `العفو${name}! 😊 يسعدنا خدمتك دايماً.`, accessToken, client.phone_number_id);
     return;
   }
 
@@ -932,6 +1195,7 @@ function pushCurrentOrderToHistory(conv: ConversationState): void {
 function resetCurrentOrder(conv: ConversationState): void {
   conv.data._cart = [];
   delete conv.data._selectedProduct;
+  delete conv.data._selectedVariant;
   delete conv.data._selectedVariantId;
   delete conv.data._selectedVariantTitle;
   delete conv.data._checkout;
@@ -941,8 +1205,14 @@ function resetCurrentOrder(conv: ConversationState): void {
   delete conv.data._selfReportedAt;
   delete conv.data._paymentLinkReshown;
   delete conv.data._awaitingHelpMessage;
+  delete conv.data._postReportReminderSent;
+  delete conv.data._timeoutRecoveryOffered;
+  delete conv.data._checkoutInProgress;
+  delete conv.data._aiAnswerCount;
+  delete conv.data._aiExhaustedNotified;
+  delete conv.data._gratitudeAcked;
   conv.data._reprompted = null;
-  // Preserve: _products, _orderHistory, name
+  // Preserve: _products, _orderHistory, name, _nameAsked
 }
 
 async function showCart(
@@ -1057,6 +1327,10 @@ async function processCheckout(
     return;
   }
 
+  // Guard against double-tap: if checkout already in progress, ignore
+  if (conv.data._checkoutInProgress) return;
+  conv.data._checkoutInProgress = true;
+
   await sendWhatsAppMessage(conv.phone, 'جاري تجهيز طلبك...', accessToken, client.phone_number_id);
 
   // Create multi-item checkout with quantities
@@ -1069,17 +1343,27 @@ async function processCheckout(
   }
 
   if (!checkout) {
+    conv.data._checkoutInProgress = false; // allow retry
     await sendWhatsAppMessage(conv.phone, 'عذراً، صار خطأ في إنشاء الطلب. جرب مرة ثانية.', accessToken, client.phone_number_id);
+    // Notify owner — customer was ready to pay but checkout failed
+    await notifyOwner(client, conv, config, 'urgent', accessToken);
     return;
   }
+
+  delete conv.data._checkoutInProgress; // checkout created — no longer needed
 
   // Calculate cart total from our local cart (source of truth) — with quantities
   const cartTotal = cart.reduce((sum: number, i: CartItem) => sum + parseFloat(i.price) * (i.quantity || 1), 0);
   const cartTotalStr = cartTotal.toFixed(2);
 
-  // Log if Shopify API total differs from our cart total
-  if (checkout.totalPrice && Math.abs(parseFloat(checkout.totalPrice) - cartTotal) > 0.01) {
-    console.warn(`⚠️ Price mismatch: Shopify API=${checkout.totalPrice}, Cart calculated=${cartTotalStr} (using cart total)`);
+  // Alert owner if Shopify price differs significantly (>1%) — discount, bundle, or currency issue
+  if (checkout.totalPrice) {
+    const shopifyTotal = parseFloat(checkout.totalPrice);
+    const diffPct = Math.abs(shopifyTotal - cartTotal) / cartTotal;
+    if (diffPct > 0.01) {
+      console.warn(`⚠️ Price mismatch: Shopify=${checkout.totalPrice}, Cart=${cartTotalStr} (${(diffPct * 100).toFixed(1)}%)`);
+      await notifyOwner(client, conv, config, 'urgent', accessToken);
+    }
   }
 
   conv.data._checkout = {
@@ -1287,7 +1571,13 @@ async function showProductView(
   const cleanDesc = product.description
     ? product.description.replace(/<[^>]*>/g, '').trim().substring(0, 200)
     : '';
-  const bodyText = `*${product.title}*\n${priceRange}${cleanDesc ? '\n\n' + cleanDesc : ''}`;
+
+  // Low stock warning — show if any available variant has quantityAvailable <= 5
+  const allVariants = product.variants || [];
+  const lowStockVariant = allVariants.find((v: any) => v.available && typeof (v as any).quantityAvailable === 'number' && (v as any).quantityAvailable <= 5 && (v as any).quantityAvailable > 0);
+  const lowStockNote = lowStockVariant ? `\n⚠️ متبقي ${(lowStockVariant as any).quantityAvailable} فقط!` : '';
+
+  const bodyText = `*${product.title}*\n${priceRange}${lowStockNote}${cleanDesc ? '\n\n' + cleanDesc : ''}`;
 
   // Check if product is already in cart — show cart shortcut if so
   const cart: CartItem[] = conv.data._cart || [];
