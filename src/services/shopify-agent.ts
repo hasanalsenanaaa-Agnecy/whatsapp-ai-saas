@@ -76,13 +76,14 @@ interface CartItem {
 // PRODUCT CACHE — fetch once per store, reuse for 15 min
 // ============================================================
 
-async function fetchProductsCached(domain: string, storefrontToken?: string): Promise<ShopifyProduct[]> {
-  const cached = _productCache.get(domain);
+async function fetchProductsCached(domain: string, storefrontToken?: string, lang = 'ar'): Promise<ShopifyProduct[]> {
+  const cacheKey = `${domain}_${lang}`;
+  const cached = _productCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < PRODUCT_CACHE_TTL_MS) {
     return cached.products;
   }
-  const products = await fetchProducts(domain, storefrontToken, 10);
-  _productCache.set(domain, { products, fetchedAt: Date.now() });
+  const products = await fetchProducts(domain, storefrontToken, 10, lang);
+  _productCache.set(cacheKey, { products, fetchedAt: Date.now() });
   return products;
 }
 
@@ -93,6 +94,24 @@ async function fetchProductsCached(domain: string, storefrontToken?: string): Pr
 // ============================================================
 
 const AI_QUESTION_BUDGET = 2;
+
+// ============================================================
+// PHONE → SHOPIFY COUNTRY CODE
+// Maps E.164 phone prefix to ISO 3166-1 alpha-2 country code
+// for Shopify Markets auto-currency on checkout.
+// ============================================================
+function phoneToCountryCode(phone: string): string | undefined {
+  const prefixes: [string, string][] = [
+    ['+965', 'KW'], ['+966', 'SA'], ['+971', 'AE'],
+    ['+973', 'BH'], ['+974', 'QA'], ['+968', 'OM'],
+    ['+962', 'JO'], ['+961', 'LB'], ['+20',  'EG'],
+    ['+1',   'US'], ['+44',  'GB'],
+  ];
+  for (const [prefix, code] of prefixes) {
+    if (phone.startsWith(prefix)) return code;
+  }
+  return undefined;
+}
 
 function isQuestionMessage(message: string): boolean {
   const lower = message.toLowerCase().trim();
@@ -511,8 +530,8 @@ async function handleWelcome(
     }
   }
 
-  // STEP 5: Fetch products (cached per store, 15 min TTL)
-  const products = await fetchProductsCached(config.domain, config.storefrontToken);
+  // STEP 5: Fetch products (cached per store+language, 15 min TTL)
+  const products = await fetchProductsCached(config.domain, config.storefrontToken, conv.data._lang || 'ar');
 
   if (products.length === 0) {
     await sendWhatsAppMessage(
@@ -1717,13 +1736,14 @@ async function processCheckout(
   const pcl: string = conv.data._lang || 'ar';
   await sendWhatsAppMessage(conv.phone, msg('جاري تجهيز طلبك...', 'Preparing your order...', pcl), accessToken, client.phone_number_id);
 
-  // Create multi-item checkout with quantities
+  // Create multi-item checkout — pass country code so Shopify Markets shows local currency
+  const countryCode = phoneToCountryCode(conv.phone);
   const lines = cart.map(item => ({ variantId: item.variantId, quantity: item.quantity || 1 }));
-  let checkout = await createMultiItemCheckout(config.domain, config.storefrontToken, lines);
+  let checkout = await createMultiItemCheckout(config.domain, config.storefrontToken, lines, countryCode);
 
   // Fallback: try single-item checkout if only 1 item and multi failed
   if (!checkout && cart.length === 1) {
-    checkout = await createCheckout(config.domain, config.storefrontToken, cart[0]!.variantId, cart[0]!.quantity || 1);
+    checkout = await createCheckout(config.domain, config.storefrontToken, cart[0]!.variantId, cart[0]!.quantity || 1, countryCode);
   }
 
   if (!checkout) {

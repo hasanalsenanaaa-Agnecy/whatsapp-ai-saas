@@ -138,9 +138,13 @@ const PRODUCT_BY_ID_QUERY = `
   }
 `;
 
-const CREATE_CART_MUTATION = `
-  mutation createCart($variantId: ID!, $quantity: Int!) {
+function buildCartMutation(countryCode?: string): string {
+  const ctx = countryCode ? ` @inContext(country: ${countryCode})` : '';
+  const identity = countryCode ? `buyerIdentity: { countryCode: ${countryCode} },` : '';
+  return `
+  mutation createCart($variantId: ID!, $quantity: Int!)${ctx} {
     cartCreate(input: {
+      ${identity}
       lines: [{ merchandiseId: $variantId, quantity: $quantity }]
     }) {
       cart {
@@ -158,10 +162,15 @@ const CREATE_CART_MUTATION = `
     }
   }
 `;
+}
 
-const CREATE_MULTI_CART_MUTATION = `
-  mutation createMultiCart($lines: [CartLineInput!]!) {
+function buildMultiCartMutation(countryCode?: string): string {
+  const ctx = countryCode ? ` @inContext(country: ${countryCode})` : '';
+  const identity = countryCode ? `buyerIdentity: { countryCode: ${countryCode} },` : '';
+  return `
+  mutation createMultiCart($lines: [CartLineInput!]!)${ctx} {
     cartCreate(input: {
+      ${identity}
       lines: $lines
     }) {
       cart {
@@ -179,6 +188,7 @@ const CREATE_MULTI_CART_MUTATION = `
     }
   }
 `;
+}
 
 // ============================================================
 // HELPER FUNCTIONS
@@ -188,12 +198,14 @@ async function shopifyGraphQL(
   shopifyDomain: string,
   storefrontToken: string | undefined,
   query: string,
-  variables: Record<string, unknown>
+  variables: Record<string, unknown>,
+  lang = 'ar'
 ): Promise<unknown> {
   const url = `https://${shopifyDomain}/api/2026-04/graphql.json`;
 
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'Accept-Language': lang === 'en' ? 'en' : 'ar'
   };
 
   // Token-based auth if token provided; otherwise use tokenless access
@@ -289,14 +301,15 @@ export function formatPriceSAR(amount: string | number): string {
 export async function fetchProducts(
   shopifyDomain: string,
   storefrontToken?: string,
-  limit = 20
+  limit = 20,
+  lang = 'ar'
 ): Promise<ShopifyProduct[]> {
   try {
     const data = await shopifyGraphQL(shopifyDomain, storefrontToken, PRODUCTS_QUERY, {
       first: limit,
       sortKey: 'BEST_SELLING',
       reverse: false
-    }) as {
+    }, lang) as {
       products: { edges: { node: Record<string, unknown> }[] };
     };
     return data.products.edges.map(e => parseProduct(e.node));
@@ -353,10 +366,11 @@ export async function createCheckout(
   shopifyDomain: string,
   storefrontToken: string | undefined,
   variantId: string,
-  quantity = 1
+  quantity = 1,
+  countryCode?: string
 ): Promise<ShopifyCheckout | null> {
   try {
-    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, CREATE_CART_MUTATION, { variantId, quantity }) as {
+    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, buildCartMutation(countryCode), { variantId, quantity }) as {
       cartCreate: {
         cart: { id: string; checkoutUrl: string; cost: { totalAmount: { amount: string; currencyCode: string } } } | null;
         userErrors: { field: string; message: string }[];
@@ -389,7 +403,8 @@ export async function createCheckout(
 export async function createMultiItemCheckout(
   shopifyDomain: string,
   storefrontToken: string | undefined,
-  items: { variantId: string; quantity: number }[]
+  items: { variantId: string; quantity: number }[],
+  countryCode?: string
 ): Promise<ShopifyCheckout | null> {
   try {
     const lines = items.map(item => ({
@@ -397,7 +412,7 @@ export async function createMultiItemCheckout(
       quantity: item.quantity
     }));
 
-    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, CREATE_MULTI_CART_MUTATION, { lines }) as {
+    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, buildMultiCartMutation(countryCode), { lines }) as {
       cartCreate: {
         cart: { id: string; checkoutUrl: string; cost: { totalAmount: { amount: string; currencyCode: string } } } | null;
         userErrors: { field: string; message: string }[];
