@@ -21,6 +21,7 @@ import {
 } from './whatsapp.js';
 import { createLead as _createLead } from './database.js'; // kept for future use; lead creation on payment is handled by shopify-webhook.ts
 import { smartTitle, truncate, normalizeArabicNumbers } from '../utils/buttons.js';
+import { emitEvent } from './events.js';
 
 // ============================================================
 // MODULE-LEVEL: PRODUCT CACHE + ANTHROPIC CLIENT
@@ -205,6 +206,7 @@ async function tryAIAnswer(
   const answer = await answerWithAI(message, products, config.storeName, config.currency, conv.messages);
   if (!answer) return false;
 
+  emitEvent(client.id, 'ai_call', conv.phone, { source: 'shopify_agent', questionNum: count + 1 });
   conv.data._aiAnswerCount = count + 1;
   await sendWhatsAppMessage(conv.phone, answer, accessToken, client.phone_number_id);
 
@@ -1775,6 +1777,7 @@ async function processCheckout(
     totalPrice: cartTotalStr,  // Use cart-calculated total, not Shopify API
     currency: checkout.currency
   };
+  emitEvent(client.id, 'checkout_created', conv.phone, { items: cart.length, total: cartTotalStr, currency: checkout.currency });
 
   // Build cart summary for payment message
   let cartSummary = '';
@@ -1824,6 +1827,9 @@ async function notifyOwner(
   type: 'paid' | 'help' | 'urgent' | 'unverified',
   accessToken: string
 ): Promise<void> {
+  if (type === 'help' || type === 'urgent') {
+    emitEvent(client.id, 'escalation', conv.phone, { reason: type });
+  }
   const cart: CartItem[] = conv.data._cart || [];
   const checkout = conv.data._checkout;
   const totalPrice = checkout?.totalPrice || (cart.length > 0 ? cart.reduce((s: number, i: CartItem) => s + parseFloat(i.price) * (i.quantity || 1), 0).toFixed(2) : '0');

@@ -4,6 +4,7 @@
 // ============================================================
 
 import { getConversation, saveConversation, getClientByPhoneNumberId } from './services/database.js';
+import { emitEvent } from './services/events.js';
 import { getDefaultMessages, type ClientMessages } from './messages.js';
 import { DEFAULT_APPOINTMENT_SETTINGS, type AppointmentSettings } from './services/appointments.js';
 
@@ -97,6 +98,7 @@ export async function handleIncomingMessage(
   // ============================================================
   if (features.handover_detection && detectHandoverIntent(message)) {
     await handleHandoverRequest(client, conv, message, clientMessages, accessToken);
+    emitEvent(client.id, 'escalation', customerPhone, { reason: 'handover_detected' });
     await saveConversation(conv);
     return;
   }

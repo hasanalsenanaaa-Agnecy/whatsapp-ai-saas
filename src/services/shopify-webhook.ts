@@ -9,6 +9,7 @@ import { getClientByShopifyDomain, getConversation, saveConversation, createLead
 import { sendWhatsAppMessage, sendWhatsAppButtons } from './whatsapp.js';
 import { formatPrice } from './shopify.js';
 import { maskPhone } from '../utils/buttons.js';
+import { emitEvent } from './events.js';
 
 // ============================================================
 // TYPES
@@ -197,6 +198,7 @@ export async function handleShopifyWebhook(
   const orderNumber = order.order_number ? `#${order.order_number}` : '';
 
   // Update conversation
+  emitEvent(client.id, 'payment_verified', customerPhone, { orderNumber, total: totalPrice, currency });
   conv.data._paymentVerified = true;
   if (customerName) conv.data.name = customerName;
   if (orderNumber) conv.data._orderNumber = orderNumber;

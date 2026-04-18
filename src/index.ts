@@ -10,6 +10,7 @@ import { checkRateLimit } from './services/rateLimiter.js';
 import { maskPhone } from './utils/buttons.js';
 import crypto from 'crypto';
 import { sendAlert, alertError } from './services/alerts.js';
+import { emitEvent } from './services/events.js';
 
 // ============================================================
 // STARTUP VALIDATION — fail fast before the server accepts traffic
@@ -194,9 +195,11 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
       }
 
       console.log(`Message from ${maskPhone(customerPhone)} [${messageText.length} chars]`);
+      emitEvent(client.id, 'message_in', customerPhone, { length: messageText.length });
       await handleIncomingMessage(phoneNumberId, customerPhone, messageText, client.access_token);
     } catch (error) {
       console.error('Webhook processing error:', error);
+      emitEvent('system', 'error', customerPhone || undefined, { error: (error as Error)?.message });
       await alertError(error as Error, 'Webhook processing failed');
     }
   });

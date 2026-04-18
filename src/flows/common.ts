@@ -30,6 +30,7 @@ import {
 } from '../services/ai-conversation.js';
 import { pushToBookingAPI } from '../services/bookingWebhook.js';
 import { normalizeArabicNumbers, maskPhone } from '../utils/buttons.js';
+import { emitEvent } from '../services/events.js';
 
 // ============================================================
 // TYPES (re-exported for use by other flows)
@@ -297,6 +298,7 @@ export async function handleChat(
       }
     }
 
+    emitEvent(client.id, 'escalation', conv.phone, { reason: intent.type });
     if (!conv.data.postCompletionIntents) conv.data.postCompletionIntents = [];
     conv.data.postCompletionIntents.push({ type: intent.type, message, time: new Date().toISOString() });
     return;
@@ -457,6 +459,7 @@ export async function handleAIFallback(
       message
     );
 
+    emitEvent(client.id, 'ai_call', conv.phone, { source: 'ai_conversation', confident: response.confident });
     await sendWhatsAppMessage(conv.phone, response.answer, accessToken, client.phone_number_id);
     conv.messages.push({ role: 'assistant', content: response.answer });
 
@@ -662,5 +665,6 @@ export async function completeLead(
   }
   conv.state = 'completed';
 
+  emitEvent(client.id, 'lead_captured', conv.phone, { score: leadScore, hasAppointment: !!appointmentId });
   console.log(`✅ Lead captured: ${maskPhone(conv.phone)} - Score: ${leadScore}${appointmentId ? ' + Appointment' : ''}`);
 }
