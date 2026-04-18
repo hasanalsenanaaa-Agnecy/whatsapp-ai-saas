@@ -1,3 +1,5 @@
+import { maskPhone } from '../utils/buttons.js';
+
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v18.0';
 
 let lastAlertTime = 0;
@@ -51,7 +53,7 @@ export async function sendAlert(
       return false;
     }
 
-    console.log(`Alert sent to ${ownerPhone}`);
+    console.log(`Alert sent to ${maskPhone(ownerPhone)}`);
     lastAlertTime = now;
     alertCount = 0;
     return true;

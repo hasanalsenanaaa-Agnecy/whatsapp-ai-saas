@@ -1,3 +1,5 @@
+import { maskPhone } from '../utils/buttons.js';
+
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v18.0';
 const REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const MAX_RETRIES = 3;
@@ -74,7 +76,7 @@ export async function sendWhatsAppMessage(to: string, message: string, accessTok
       console.error('❌ WhatsApp error:', await response.text());
       return false;
     }
-    console.log(`✅ Message sent to ${to}`);
+    console.log(`✅ Message sent to ${maskPhone(to)}`);
     return true;
   } catch (error) {
     console.error('❌ Send failed:', error);
@@ -113,7 +115,7 @@ export async function sendWhatsAppButtons(to: string, bodyText: string, buttons:
       console.error('❌ Buttons error:', await response.text());
       return sendWhatsAppMessage(to, bodyText, accessToken, phoneNumberId);
     }
-    console.log(`✅ Buttons sent to ${to}`);
+    console.log(`✅ Buttons sent to ${maskPhone(to)}`);
     return true;
   } catch (error) {
     return sendWhatsAppMessage(to, bodyText, accessToken, phoneNumberId);
@@ -140,7 +142,7 @@ export async function sendWhatsAppImage(to: string, imageUrl: string, caption: s
       console.error('❌ Image error:', await response.text());
       return sendWhatsAppMessage(to, `${caption}\n\n🖼️ ${imageUrl}`, accessToken, phoneNumberId);
     }
-    console.log(`✅ Image sent to ${to}`);
+    console.log(`✅ Image sent to ${maskPhone(to)}`);
     return true;
   } catch (error) {
     return sendWhatsAppMessage(to, `${caption}\n\n🖼️ ${imageUrl}`, accessToken, phoneNumberId);
@@ -184,7 +186,7 @@ export async function sendWhatsAppButtonsWithImage(to: string, imageUrl: string,
       console.error('❌ Buttons+image error:', await response.text());
       return sendWhatsAppButtons(to, bodyText, buttons, accessToken, phoneNumberId);
     }
-    console.log(`✅ Buttons+image sent to ${to}`);
+    console.log(`✅ Buttons+image sent to ${maskPhone(to)}`);
     return true;
   } catch (error) {
     return sendWhatsAppButtons(to, bodyText, buttons, accessToken, phoneNumberId);
@@ -224,7 +226,7 @@ export async function sendWhatsAppList(to: string, bodyText: string, buttonText:
       const numberedText = bodyText + '\n\n' + options.map((opt, i) => `${i + 1}️⃣ ${opt.title}`).join('\n');
       return sendWhatsAppMessage(to, numberedText, accessToken, phoneNumberId);
     }
-    console.log(`✅ List sent to ${to}`);
+    console.log(`✅ List sent to ${maskPhone(to)}`);
     return true;
   } catch (error) {
     const numberedText = bodyText + '\n\n' + options.map((opt, i) => `${i + 1}️⃣ ${opt.title}`).join('\n');

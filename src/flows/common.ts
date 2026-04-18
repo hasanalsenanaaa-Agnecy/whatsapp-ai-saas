@@ -29,7 +29,7 @@ import {
   isAIConversationAvailable
 } from '../services/ai-conversation.js';
 import { pushToBookingAPI } from '../services/bookingWebhook.js';
-import { normalizeArabicNumbers } from '../utils/buttons.js';
+import { normalizeArabicNumbers, maskPhone } from '../utils/buttons.js';
 
 // ============================================================
 // TYPES (re-exported for use by other flows)
@@ -272,7 +272,7 @@ export async function handleChat(
   accessToken: string
 ): Promise<void> {
   const intent = detectPostCompletionIntent(message);
-  console.log(`💬 Chat intent: ${intent.type} (${intent.confidence}) from ${conv.data.name || conv.phone}`);
+  console.log(`💬 Chat intent: ${intent.type} (${intent.confidence}) from ${maskPhone(conv.phone)}`);
 
   if (intent.forwardToAgent) {
     const response = INTENT_RESPONSES[intent.type] || '';
@@ -662,5 +662,5 @@ export async function completeLead(
   }
   conv.state = 'completed';
 
-  console.log(`✅ Lead captured: ${conv.data.name} (${conv.phone}) - Score: ${leadScore}${appointmentId ? ' + Appointment' : ''}`);
+  console.log(`✅ Lead captured: ${maskPhone(conv.phone)} - Score: ${leadScore}${appointmentId ? ' + Appointment' : ''}`);
 }

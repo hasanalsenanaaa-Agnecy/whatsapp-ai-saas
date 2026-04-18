@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import { getClientByShopifyDomain, getConversation, saveConversation, createLead } from './database.js';
 import { sendWhatsAppMessage, sendWhatsAppButtons } from './whatsapp.js';
 import { formatPrice } from './shopify.js';
+import { maskPhone } from '../utils/buttons.js';
 
 // ============================================================
 // TYPES
@@ -144,7 +145,7 @@ export async function handleShopifyWebhook(
   // Find conversation
   const conv = await getConversation(client.id, customerPhone);
   if (!conv) {
-    console.log(`Shopify webhook: no conversation found for phone ${customerPhone}`);
+    console.log(`Shopify webhook: no conversation found for phone ${maskPhone(customerPhone)}`);
     return;
   }
 
@@ -155,13 +156,13 @@ export async function handleShopifyWebhook(
     || (shopifyState === 'done' && conv.data._paymentVerified === false);
 
   if (!isPaymentPending) {
-    console.log(`Shopify webhook: conversation for ${customerPhone} not in payment state (state=${shopifyState})`);
+    console.log(`Shopify webhook: conversation for ${maskPhone(customerPhone)} not in payment state (state=${shopifyState})`);
     return;
   }
 
   // Already verified? Skip duplicate webhooks
   if (conv.data._paymentVerified === true) {
-    console.log(`Shopify webhook: payment already verified for ${customerPhone}`);
+    console.log(`Shopify webhook: payment already verified for ${maskPhone(customerPhone)}`);
     return;
   }
 
@@ -294,5 +295,5 @@ ${productsText}
     console.error('Shopify webhook: lead save error:', err);
   }
 
-  console.log(`✅ Shopify webhook: payment verified for ${conv.phone} → ${orderNumber || 'order'} (${totalPrice} ${currency})`);
+  console.log(`✅ Shopify webhook: payment verified for ${maskPhone(conv.phone)} → ${orderNumber || 'order'} (${totalPrice} ${currency})`);
 }

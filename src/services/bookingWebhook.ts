@@ -1,4 +1,5 @@
 // src/services/bookingWebhook.ts
+import { maskPhone } from '../utils/buttons.js';
 
 interface BookingPayload {
   contact_type: 'whatsapp';
@@ -52,7 +53,7 @@ export async function pushToBookingAPI(client: any, conv: any): Promise<boolean>
       return false;
     }
 
-    console.log(`✅ Booking created for ${conv.phone}`);
+    console.log(`✅ Booking created for ${maskPhone(conv.phone)}`);
     return true;
   } catch (error) {
     console.error('❌ Booking webhook error:', error);

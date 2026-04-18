@@ -51,6 +51,12 @@ export function smartTitle(title: string, max: number): string {
   return truncate(compact, max);
 }
 
+/** Mask a phone number for logging — keeps prefix + last 3, hides the rest */
+export function maskPhone(phone: string): string {
+  if (!phone || phone.length < 7) return '***';
+  return phone.slice(0, 4) + '*'.repeat(phone.length - 7) + phone.slice(-3);
+}
+
 /** Convert Arabic/Eastern Arabic numerals to Western digits */
 export function normalizeArabicNumbers(text: string): string {
   const map: Record<string, string> = {

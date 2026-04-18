@@ -1,6 +1,7 @@
 import { getPendingReminders, markReminderSent, getClientById } from '../services/database.js';
 import { sendWhatsAppMessage } from '../services/whatsapp.js';
 import { formatMessage, getDefaultMessages } from '../messages.js';
+import { maskPhone } from '../utils/buttons.js';
 
 // ============================================================
 // APPOINTMENT REMINDERS
@@ -66,15 +67,15 @@ export async function processReminders(): Promise<{
         if (sent) {
           await markReminderSent(appointment.id);
           result.sent++;
-          console.log(`✅ Reminder sent to ${appointment.phone}`);
+          console.log(`✅ Reminder sent to ${maskPhone(appointment.phone)}`);
         } else {
           result.failed++;
-          result.errors.push(`Failed to send to ${appointment.phone}`);
+          result.errors.push(`Failed to send to ${maskPhone(appointment.phone)}`);
         }
 
       } catch (error) {
         result.failed++;
-        result.errors.push(`Error for ${appointment.phone}: ${error}`);
+        result.errors.push(`Error for ${maskPhone(appointment.phone)}: ${error}`);
         console.error(`❌ Reminder error:`, error);
       }
     }

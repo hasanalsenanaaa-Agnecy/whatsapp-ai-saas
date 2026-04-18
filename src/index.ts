@@ -7,6 +7,7 @@ import { handleIncomingMessage } from './conversation.js';
 import { handleReminderCron } from './cron/reminders.js';
 import { handleShopifyWebhook } from './services/shopify-webhook.js';
 import { checkRateLimit } from './services/rateLimiter.js';
+import { maskPhone } from './utils/buttons.js';
 import crypto from 'crypto';
 import { sendAlert, alertError } from './services/alerts.js';
 
@@ -182,7 +183,7 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
 
       // Per-phone rate limit (10 messages/min)
       if (!checkRateLimit(customerPhone)) {
-        console.warn(`Rate limit exceeded for ${customerPhone}`);
+        console.warn(`Rate limit exceeded for ${maskPhone(customerPhone)}`);
         return;
       }
 
@@ -192,7 +193,7 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
         return;
       }
 
-      console.log('Message from ' + customerPhone + ': ' + messageText);
+      console.log(`Message from ${maskPhone(customerPhone)} [${messageText.length} chars]`);
       await handleIncomingMessage(phoneNumberId, customerPhone, messageText, client.access_token);
     } catch (error) {
       console.error('Webhook processing error:', error);
