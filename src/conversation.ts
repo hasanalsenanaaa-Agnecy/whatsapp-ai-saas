@@ -23,7 +23,7 @@ import {
   type ClientFeatures
 } from './flows/common.js';
 
-const CONVERSATION_TIMEOUT_HOURS = 24;
+const CONVERSATION_TIMEOUT_HOURS = 4;
 
 // ============================================================
 // MAIN HANDLER
