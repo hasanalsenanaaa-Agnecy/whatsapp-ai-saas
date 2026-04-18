@@ -2110,7 +2110,7 @@ async function showProductList(
   const groups = new Map<string, { products: ShopifyProduct[]; indices: number[] }>();
   for (let i = 0; i < products.length; i++) {
     const p = products[i]!;
-    const baseName = p.title.replace(weightRegex, '').trim();
+    const baseName = p.title.replace(weightRegex, '').replace(/[،,]\s*$/, '').trim();
     if (!groups.has(baseName)) groups.set(baseName, { products: [], indices: [] });
     groups.get(baseName)!.products.push(p);
     groups.get(baseName)!.indices.push(i);
@@ -2170,7 +2170,7 @@ async function showProductNames(
   const groups = new Map<string, { products: ShopifyProduct[]; indices: number[] }>();
   for (let i = 0; i < Math.min(products.length, 10); i++) {
     const p = products[i]!;
-    const baseName = p.title.replace(weightRegex, '').trim();
+    const baseName = p.title.replace(weightRegex, '').replace(/[،,]\s*$/, '').trim();
     if (!groups.has(baseName)) groups.set(baseName, { products: [], indices: [] });
     groups.get(baseName)!.products.push(p);
     groups.get(baseName)!.indices.push(i);
@@ -2183,6 +2183,12 @@ async function showProductNames(
     const firstProduct = group.products[0]!;
     const imageUrl = firstProduct.imageUrl;
 
+    // Short description from Shopify (language-aware, strip HTML, max 80 chars)
+    const rawDesc = firstProduct.description
+      ? firstProduct.description.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().substring(0, 80)
+      : '';
+    const descLine = rawDesc ? `\n\n${rawDesc}` : '';
+
     let bodyText: string;
     let buttons: { id: string; title: string }[];
 
@@ -2194,14 +2200,14 @@ async function showProductNames(
       const variantLines = isMultiVariant
         ? availableVariants.map(v => `• ${v.title} — ${formatPrice(v.price, config.currency)}`).join('\n')
         : formatPrice(p.priceMin, config.currency);
-      bodyText = `*${cleanBaseName}*\n${variantLines}`;
+      bodyText = `*${cleanBaseName}*\n${variantLines}${descLine}`;
       buttons = [
         { id: `pick_${group.indices[0]}`, title: msg('اختر ✅', 'Select ✅', ibl) },
         { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ibl) }
       ];
     } else if (group.products.length <= 3) {
-      // Multiple separate weight products — put weights as direct buttons on the card
-      bodyText = `*${cleanBaseName}*`;
+      // Multiple separate weight products — weights as direct buttons on the card
+      bodyText = `*${cleanBaseName}*${descLine}`;
       buttons = group.products.map((p, j) => {
         const weightMatch = p.title.match(/(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i);
         const weight = weightMatch ? weightMatch[0].trim() : p.title;
@@ -2220,7 +2226,7 @@ async function showProductNames(
         const weight = weightMatch ? weightMatch[0].trim() : p.title;
         return `• ${weight} — ${formatPrice(p.priceMin, config.currency)}`;
       }).join('\n');
-      bodyText = `*${cleanBaseName}*\n${weightLines}`;
+      bodyText = `*${cleanBaseName}*\n${weightLines}${descLine}`;
       buttons = [
         { id: `pick_${group.indices[0]}`, title: msg('اختر ✅', 'Select ✅', ibl) },
         { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ibl) }
