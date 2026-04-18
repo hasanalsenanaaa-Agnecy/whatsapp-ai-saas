@@ -2025,14 +2025,21 @@ async function showProductView(
 ): Promise<void> {
   conv.data._selectedProduct = product;
 
+  // Strip trailing Arabic/Western commas from product title
+  const displayTitle = product.title.replace(/[،,]\s*$/, '').trim();
+
+  const selectedVariantTitle = conv.data._selectedVariantTitle;
+  const variantLabel = selectedVariantTitle && selectedVariantTitle !== 'Default Title'
+    ? ` — ${selectedVariantTitle}` : '';
+
   const price = formatPrice(product.priceMin, config.currency);
   const priceRange = product.priceMax && product.priceMax !== product.priceMin
     ? `${price} — ${formatPrice(product.priceMax, config.currency)}`
     : price;
 
-  // Show title, price, and a short description so the customer can make a decision
+  // Short real description from Shopify (strip HTML, max 100 chars)
   const cleanDesc = product.description
-    ? product.description.replace(/<[^>]*>/g, '').trim().substring(0, 200)
+    ? product.description.replace(/<[^>]*>/g, '').trim().substring(0, 100)
     : '';
 
   // Low stock warning — show if any available variant has quantityAvailable <= 5
@@ -2040,7 +2047,7 @@ async function showProductView(
   const lowStockVariant = allVariants.find((v: any) => v.available && typeof (v as any).quantityAvailable === 'number' && (v as any).quantityAvailable <= 5 && (v as any).quantityAvailable > 0);
   const lowStockNote = lowStockVariant ? `\n⚠️ متبقي ${(lowStockVariant as any).quantityAvailable} فقط!` : '';
 
-  const bodyText = `*${product.title}*\n${priceRange}${lowStockNote}${cleanDesc ? '\n\n' + cleanDesc : ''}`;
+  const bodyText = `*${displayTitle}${variantLabel}*\n${priceRange}${lowStockNote}${cleanDesc ? '\n\n' + cleanDesc : ''}`;
 
   // Check if product is already in cart — show cart shortcut if so
   const cart: CartItem[] = conv.data._cart || [];
@@ -2085,7 +2092,7 @@ async function showProductView(
 async function showProductList(
   client: any,
   conv: ConversationState,
-  config: ShopifyAgentConfig,
+  _config: ShopifyAgentConfig,
   accessToken: string
 ): Promise<void> {
   const products: ShopifyProduct[] = conv.data._products || [];
@@ -2098,7 +2105,6 @@ async function showProductList(
 
   const pll: string = conv.data._lang || 'ar';
   const weightRegex = /\s*\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb)\s*/i;
-  const weightExtract = /(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i;
 
   // Group by base name — "تمر خلاص 500g" + "تمر خلاص 1kg" → one list row showing all weights
   const groups = new Map<string, { products: ShopifyProduct[]; indices: number[] }>();
@@ -2110,31 +2116,21 @@ async function showProductList(
     groups.get(baseName)!.indices.push(i);
   }
 
-  const listItems: { id: string; title: string; description?: string }[] = [];
+  const listItems: { id: string; title: string }[] = [];
   for (const [baseName, group] of groups) {
+    // Strip trailing Arabic/Western commas from product name
+    const cleanName = smartTitle(baseName.replace(/[،,]\s*$/, '').trim(), 24);
     if (group.products.length === 1) {
-      const p = group.products[0]!;
-      const weightMatch = p.title.match(weightExtract);
-      const weight = weightMatch ? weightMatch[0].trim() : null;
       listItems.push({
         id: `pick_${group.indices[0]}`,
-        title: smartTitle(baseName, 24),
-        description: weight ? `${weight} — ${formatPrice(p.priceMin, config.currency)}` : formatPrice(p.priceMin, config.currency)
+        title: cleanName
       });
     } else {
-      // Multiple weights — show all weights in description, link to first product (weight select happens next)
-      const weightList = group.products.map(p => {
-        const wm = p.title.match(weightExtract);
-        return wm ? wm[0].trim() : p.title;
-      }).join(msg(' | ', ' | ', pll));
-      listItems.push({
-        id: `pick_group_${group.indices[0]}_${group.indices.slice(1).join('_')}`,
-        title: smartTitle(baseName, 24),
-        description: weightList
-      });
-      // Store group mapping for selection handler
+      // Multiple weights — just show name, weight selection happens after tap
+      const groupId = `pick_group_${group.indices[0]}_${group.indices.slice(1).join('_')}`;
+      listItems.push({ id: groupId, title: cleanName });
       if (!conv.data._productGroups) conv.data._productGroups = {};
-      conv.data._productGroups[`pick_group_${group.indices[0]}_${group.indices.slice(1).join('_')}`] = group.indices;
+      conv.data._productGroups[groupId] = group.indices;
     }
   }
 
@@ -2183,6 +2179,7 @@ async function showProductNames(
   const groupEntries = Array.from(groups.entries());
   for (let g = 0; g < groupEntries.length; g++) {
     const [baseName, group] = groupEntries[g]!;
+    const cleanBaseName = baseName.replace(/[،,]\s*$/, '').trim();
     const firstProduct = group.products[0]!;
     const imageUrl = firstProduct.imageUrl;
 
@@ -2197,14 +2194,14 @@ async function showProductNames(
       const variantLines = isMultiVariant
         ? availableVariants.map(v => `• ${v.title} — ${formatPrice(v.price, config.currency)}`).join('\n')
         : formatPrice(p.priceMin, config.currency);
-      bodyText = `*${baseName}*\n${variantLines}`;
+      bodyText = `*${cleanBaseName}*\n${variantLines}`;
       buttons = [
         { id: `pick_${group.indices[0]}`, title: msg('اختر ✅', 'Select ✅', ibl) },
         { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ibl) }
       ];
     } else if (group.products.length <= 3) {
       // Multiple separate weight products — put weights as direct buttons on the card
-      bodyText = `*${baseName}*`;
+      bodyText = `*${cleanBaseName}*`;
       buttons = group.products.map((p, j) => {
         const weightMatch = p.title.match(/(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i);
         const weight = weightMatch ? weightMatch[0].trim() : p.title;
@@ -2223,7 +2220,7 @@ async function showProductNames(
         const weight = weightMatch ? weightMatch[0].trim() : p.title;
         return `• ${weight} — ${formatPrice(p.priceMin, config.currency)}`;
       }).join('\n');
-      bodyText = `*${baseName}*\n${weightLines}`;
+      bodyText = `*${cleanBaseName}*\n${weightLines}`;
       buttons = [
         { id: `pick_${group.indices[0]}`, title: msg('اختر ✅', 'Select ✅', ibl) },
         { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ibl) }
