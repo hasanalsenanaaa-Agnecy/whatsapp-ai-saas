@@ -255,7 +255,7 @@ export async function handleShopifyAgent(
   }
 
   // BUTTON ID check — buttons always get priority
-  const isButtonId = /^(pick_\d+|var_\d+|show_images|pick_direct|add_to_cart|back_to_list|qty_\d+|view_cart|checkout_now|add_more|remove_item|remove_\d+|no_thanks|paid_yes|paid_help|new_order|track_order|contact_us|continue_cart|clear_cart|go_home|lang_ar|lang_en|intent_order|intent_status|intent_cs)$/.test(trimmed);
+  const isButtonId = /^(pick_\d+|pick_group_[\d_]+|var_\d+|show_images|pick_direct|add_to_cart|back_to_list|qty_\d+|view_cart|checkout_now|add_more|remove_item|remove_\d+|no_thanks|paid_yes|paid_help|new_order|track_order|contact_us|continue_cart|clear_cart|go_home|lang_ar|lang_en|intent_order|intent_status|intent_cs)$/.test(trimmed);
 
   // GLOBAL NAV — works from any state
   if (shopifyState !== 'welcome') {
@@ -353,9 +353,12 @@ async function handleWelcome(
   const lang: string | undefined = conv.data._lang;
   if (!lang) {
     if (!conv.data._langAsked) {
+      const nameParts = config.storeName.split(' | ');
+      const nameAr = nameParts.length > 1 ? nameParts[1] : config.storeName;
+      const nameEn = nameParts[0];
       await sendWhatsAppButtons(
         conv.phone,
-        `أهلاً بك في *${config.storeName}*! 🛍️\nWelcome to *${config.storeName}*! 🛍️\n\n🌐 اختر لغتك / Choose your language`,
+        `أهلاً بك في *${nameAr}*! 🛍️\nWelcome to *${nameEn}*! 🛍️\n\n🌐 اختر لغتك / Choose your language`,
         [
           { id: 'lang_ar', title: 'العربية' },
           { id: 'lang_en', title: 'English' }
@@ -373,9 +376,12 @@ async function handleWelcome(
     } else if (isEnglish) {
       conv.data._lang = 'en';
     } else {
+      const nameParts2 = config.storeName.split(' | ');
+      const nameAr2 = nameParts2.length > 1 ? nameParts2[1] : config.storeName;
+      const nameEn2 = nameParts2[0];
       await sendWhatsAppButtons(
         conv.phone,
-        `أهلاً بك في *${config.storeName}*! 🛍️\nWelcome to *${config.storeName}*! 🛍️\n\n🌐 اختر لغتك / Choose your language`,
+        `أهلاً بك في *${nameAr2}*! 🛍️\nWelcome to *${nameEn2}*! 🛍️\n\n🌐 اختر لغتك / Choose your language`,
         [
           { id: 'lang_ar', title: 'العربية' },
           { id: 'lang_en', title: 'English' }
@@ -696,6 +702,25 @@ async function handleCatalogSelection(
     return;
   }
 
+  // Grouped product selection — show weight buttons
+  if (trimmed.startsWith('pick_group_')) {
+    const groupIndices: number[] | undefined = conv.data._productGroups?.[trimmed];
+    if (groupIndices && groupIndices.length > 0) {
+      const groupProducts = groupIndices.map((i: number) => products[i]).filter(Boolean) as ShopifyProduct[];
+      const gl: string = conv.data._lang || 'ar';
+      const weightExtractG = /(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i;
+      const baseName = groupProducts[0]!.title.replace(/\s*\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb)\s*/i, '').trim();
+      const buttons = groupProducts.slice(0, 3).map((p, j) => {
+        const wm = p.title.match(weightExtractG);
+        const weight = wm ? wm[0].trim() : p.title;
+        return { id: `pick_${groupIndices[j]}`, title: `${weight} — ${formatPrice(p.priceMin, config.currency)}` };
+      });
+      if (buttons.length < 3) buttons.push({ id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', gl) });
+      await sendWhatsAppButtons(conv.phone, `*${baseName}*\n${msg('اختر الوزن:', 'Choose weight:', gl)}`, buttons, accessToken, client.phone_number_id);
+      return;
+    }
+  }
+
   // Try direct product name match
   let selected = matchProduct(message, products);
 
@@ -866,8 +891,7 @@ async function handleQuantitySelect(
   // Add to cart with quantity
   addToCart(conv, product, variant?.id, variant?.title, variant?.price || product.priceMin, qty);
 
-  const unitPrice = parseFloat(variant?.price || product.priceMin);
-  const lineTotal = formatPrice((unitPrice * qty).toFixed(2), config.currency);
+
   const itemLabel = variant?.title && variant.title !== 'Default Title'
     ? `${product.title} (${variant.title})`
     : product.title;
@@ -875,11 +899,25 @@ async function handleQuantitySelect(
 
   conv.messages.push({ role: 'assistant', content: `Added ${itemLabel} x${qty} to cart` });
 
-  // Show line total (not unit price) so customer knows exactly what they're committing to
+  // Build cart summary to show alongside confirmation
   const cartl: string = conv.data._lang || 'ar';
+  const updatedCart: CartItem[] = conv.data._cart || [];
+  const cartLines = updatedCart.map(item => {
+    const q = item.quantity || 1;
+    const linePrice = formatPrice((parseFloat(item.price) * q).toFixed(2), config.currency);
+    let line = `• ${item.productTitle}`;
+    if (item.variantTitle && item.variantTitle !== 'Default Title') line += ` (${item.variantTitle})`;
+    if (q > 1) line += ` x${q}`;
+    line += ` — ${linePrice}`;
+    return line;
+  }).join('\n');
+  const cartTotal = formatPrice(updatedCart.reduce((sum, i) => sum + parseFloat(i.price) * (i.quantity || 1), 0).toFixed(2), config.currency);
+
+  const confirmMsg = `✅ ${msg('تمت الإضافة', 'Added', cartl)}: *${itemLabel}*${qtyLabel}\n\n🛒 ${msg('سلتك:', 'Your cart:', cartl)}\n${cartLines}\n\n💰 ${msg('الإجمالي', 'Total', cartl)}: *${cartTotal}*`;
+
   await sendWhatsAppButtons(
     conv.phone,
-    `${msg('تمت الإضافة', 'Added', cartl)}: *${itemLabel}*${qtyLabel} — ${lineTotal}`,
+    confirmMsg,
     [
       { id: 'add_more', title: msg('تسوق أكثر', 'Shop More', cartl) },
       { id: 'view_cart', title: msg('السلة', 'Cart', cartl) },
@@ -904,18 +942,12 @@ async function handleCart(
 ): Promise<void> {
   const lower = message.toLowerCase().trim();
 
-  // Add more products
+  // Add more products — always show list (not image cards again)
   if (lower === 'add_more' || lower === 'تسوق' || lower === 'تسوق أكثر'
     || lower.includes('أضف منتج') || lower.includes('ضيف منتج') || lower.includes('زيد منتج')
     || lower.includes('أضف أكثر') || lower.includes('تسوق أكثر')) {
-    const browseMode = conv.data._browseMode || 'list';
-    if (browseMode === 'image') {
-      await showProductNames(client, conv, config, accessToken);
-      conv.data._shopifyState = 'image_browse';
-    } else {
-      await showProductList(client, conv, config, accessToken);
-      conv.data._shopifyState = 'catalog';
-    }
+    await showProductList(client, conv, config, accessToken);
+    conv.data._shopifyState = 'catalog';
     return;
   }
 
@@ -2044,24 +2076,48 @@ async function showProductList(
 
   conv.data._browseMode = 'list';
 
-  // Extract weight/size from product title (e.g. "تمر سكري 500g" → weight: "500g")
-  // Show: short name as title, weight + price as description
-  const weightRegex = /(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i;
-  const listItems = products.map((p, i) => {
-    const weightMatch = p.title.match(weightRegex);
-    const weight = weightMatch ? weightMatch[0].trim() : null;
-    const shortTitle = weight ? p.title.replace(weightMatch![0], '').trim() : p.title;
-    const description = [weight, formatPrice(p.priceMin, config.currency)]
-      .filter(Boolean).join(' — ');
-    return {
-      id: `pick_${i}`,
-      title: smartTitle(shortTitle, 24),
-      description
-    };
-  });
-
   const pll: string = conv.data._lang || 'ar';
-  // Use sendWhatsAppList — products fit in a single list
+  const weightRegex = /\s*\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb)\s*/i;
+  const weightExtract = /(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i;
+
+  // Group by base name — "تمر خلاص 500g" + "تمر خلاص 1kg" → one list row showing all weights
+  const groups = new Map<string, { products: ShopifyProduct[]; indices: number[] }>();
+  for (let i = 0; i < products.length; i++) {
+    const p = products[i]!;
+    const baseName = p.title.replace(weightRegex, '').trim();
+    if (!groups.has(baseName)) groups.set(baseName, { products: [], indices: [] });
+    groups.get(baseName)!.products.push(p);
+    groups.get(baseName)!.indices.push(i);
+  }
+
+  const listItems: { id: string; title: string; description?: string }[] = [];
+  for (const [baseName, group] of groups) {
+    if (group.products.length === 1) {
+      const p = group.products[0]!;
+      const weightMatch = p.title.match(weightExtract);
+      const weight = weightMatch ? weightMatch[0].trim() : null;
+      listItems.push({
+        id: `pick_${group.indices[0]}`,
+        title: smartTitle(baseName, 24),
+        description: weight ? `${weight} — ${formatPrice(p.priceMin, config.currency)}` : formatPrice(p.priceMin, config.currency)
+      });
+    } else {
+      // Multiple weights — show all weights in description, link to first product (weight select happens next)
+      const weightList = group.products.map(p => {
+        const wm = p.title.match(weightExtract);
+        return wm ? wm[0].trim() : p.title;
+      }).join(msg(' | ', ' | ', pll));
+      listItems.push({
+        id: `pick_group_${group.indices[0]}_${group.indices.slice(1).join('_')}`,
+        title: smartTitle(baseName, 24),
+        description: weightList
+      });
+      // Store group mapping for selection handler
+      if (!conv.data._productGroups) conv.data._productGroups = {};
+      conv.data._productGroups[`pick_group_${group.indices[0]}_${group.indices.slice(1).join('_')}`] = group.indices;
+    }
+  }
+
   await sendWhatsAppList(
     conv.phone,
     msg('اختر المنتج اللي تبيه:', 'Choose a product:', pll),
@@ -2093,28 +2149,73 @@ async function showProductNames(
     return;
   }
 
-  // Send each product as an image card with variants + select button
+  // Group products by base name — strip weight suffix so "تمر خلاص 500g" and "تمر خلاص 1kg" become one card
+  const weightRegex = /\s*\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb)\s*/i;
+  const groups = new Map<string, { products: ShopifyProduct[]; indices: number[] }>();
   for (let i = 0; i < Math.min(products.length, 10); i++) {
     const p = products[i]!;
-    const availableVariants = p.variants.filter(v => v.available);
-    const isMultiVariant = availableVariants.length > 1 && availableVariants.some(v => v.title !== 'Default Title');
+    const baseName = p.title.replace(weightRegex, '').trim();
+    if (!groups.has(baseName)) groups.set(baseName, { products: [], indices: [] });
+    groups.get(baseName)!.products.push(p);
+    groups.get(baseName)!.indices.push(i);
+  }
 
-    // Build variant lines: "• 500g — 4.500 KWD"
-    const variantLines = isMultiVariant
-      ? availableVariants.map(v => `• ${v.title} — ${formatPrice(v.price, config.currency)}`).join('\n')
-      : formatPrice(p.priceMin, config.currency);
+  const groupEntries = Array.from(groups.entries());
+  for (let g = 0; g < groupEntries.length; g++) {
+    const [baseName, group] = groupEntries[g]!;
+    const firstProduct = group.products[0]!;
+    const imageUrl = firstProduct.imageUrl;
 
-    const bodyText = `*${p.title}*\n${variantLines}`;
-    const buttons = [
-      { id: `pick_${i}`, title: msg('اختر ✅', 'Select ✅', ibl) },
-      { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ibl) }
-    ];
-    if (p.imageUrl) {
-      await sendWhatsAppButtonsWithImage(conv.phone, p.imageUrl, bodyText, buttons, accessToken, client.phone_number_id);
+    let bodyText: string;
+    let buttons: { id: string; title: string }[];
+
+    if (group.products.length === 1) {
+      // Single product — may still have Shopify variants
+      const p = group.products[0]!;
+      const availableVariants = p.variants.filter(v => v.available);
+      const isMultiVariant = availableVariants.length > 1 && availableVariants.some(v => v.title !== 'Default Title');
+      const variantLines = isMultiVariant
+        ? availableVariants.map(v => `• ${v.title} — ${formatPrice(v.price, config.currency)}`).join('\n')
+        : formatPrice(p.priceMin, config.currency);
+      bodyText = `*${baseName}*\n${variantLines}`;
+      buttons = [
+        { id: `pick_${group.indices[0]}`, title: msg('اختر ✅', 'Select ✅', ibl) },
+        { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ibl) }
+      ];
+    } else if (group.products.length <= 3) {
+      // Multiple separate weight products — put weights as direct buttons on the card
+      bodyText = `*${baseName}*`;
+      buttons = group.products.map((p, j) => {
+        const weightMatch = p.title.match(/(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i);
+        const weight = weightMatch ? weightMatch[0].trim() : p.title;
+        return { id: `pick_${group.indices[j]}`, title: `${weight} — ${formatPrice(p.priceMin, config.currency)}` };
+      });
+      // Add home button only if room (< 3 weight buttons); otherwise add text hint
+      if (group.products.length < 3) {
+        buttons.push({ id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ibl) });
+      } else {
+        bodyText += `\n\n💡 ${msg('اكتب *رئيسية* للرجوع', 'Type *home* to go back', ibl)}`;
+      }
+    } else {
+      // 4+ weight variants — list in body, single select button
+      const weightLines = group.products.map(p => {
+        const weightMatch = p.title.match(/(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i);
+        const weight = weightMatch ? weightMatch[0].trim() : p.title;
+        return `• ${weight} — ${formatPrice(p.priceMin, config.currency)}`;
+      }).join('\n');
+      bodyText = `*${baseName}*\n${weightLines}`;
+      buttons = [
+        { id: `pick_${group.indices[0]}`, title: msg('اختر ✅', 'Select ✅', ibl) },
+        { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ibl) }
+      ];
+    }
+
+    if (imageUrl) {
+      await sendWhatsAppButtonsWithImage(conv.phone, imageUrl, bodyText, buttons, accessToken, client.phone_number_id);
     } else {
       await sendWhatsAppButtons(conv.phone, bodyText, buttons, accessToken, client.phone_number_id);
     }
-    if (i < products.length - 1) await new Promise(r => setTimeout(r, 350));
+    if (g < groupEntries.length - 1) await new Promise(r => setTimeout(r, 350));
   }
 
   conv.data._shopifyState = 'image_browse';
