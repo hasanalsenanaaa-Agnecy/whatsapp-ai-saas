@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import type { ClientConfig } from '../types/client.js';
 
 let sheets: any = null;
 let sheetsInitialized = false;
@@ -22,7 +23,7 @@ export async function initGoogleSheets() {
   }
 }
 
-export async function saveLeadToSheet(client: any, leadData: Record<string, any>) {
+export async function saveLeadToSheet(client: ClientConfig, leadData: Record<string, any>) {
   if (!sheetsInitialized || !sheets) return false;
   
   const sheetId = client.settings?.googleSheetId || process.env.GOOGLE_SHEET_ID;

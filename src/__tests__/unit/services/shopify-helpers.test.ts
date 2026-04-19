@@ -24,7 +24,7 @@ const mockProducts: ShopifyProduct[] = [
     priceMin: '5.000',
     priceMax: '5.000',
     imageUrl: 'https://example.com/khalas.jpg',
-    variants: [{ id: 'v1', title: '500g', price: '5.000', available: true }],
+    variants: [{ id: 'v1', title: '500g', price: '5.000', available: true, compareAtPrice: null }],
     tags: ['best-seller'],
     compareAtPriceMin: null
   },
@@ -35,7 +35,7 @@ const mockProducts: ShopifyProduct[] = [
     priceMin: '8.000',
     priceMax: '8.000',
     imageUrl: 'https://example.com/sukkari.jpg',
-    variants: [{ id: 'v2', title: '1kg', price: '8.000', available: true }],
+    variants: [{ id: 'v2', title: '1kg', price: '8.000', available: true, compareAtPrice: null }],
     tags: ['new'],
     compareAtPriceMin: null
   },
@@ -46,16 +46,16 @@ const mockProducts: ShopifyProduct[] = [
     priceMin: '12.000',
     priceMax: '12.000',
     imageUrl: null,
-    variants: [{ id: 'v3', title: '250g', price: '12.000', available: true }],
+    variants: [{ id: 'v3', title: '250g', price: '12.000', available: true, compareAtPrice: null }],
     tags: ['gift', 'premium'],
     compareAtPriceMin: '15.000'
   }
 ];
 
 const mockVariants = [
-  { id: 'v1', title: '500g', price: '5.000', available: true },
-  { id: 'v2', title: '1kg', price: '8.000', available: true },
-  { id: 'v3', title: '250g', price: '12.000', available: true }
+  { id: 'v1', title: '500g', price: '5.000', available: true, compareAtPrice: null },
+  { id: 'v2', title: '1kg', price: '8.000', available: true, compareAtPrice: null },
+  { id: 'v3', title: '250g', price: '12.000', available: true, compareAtPrice: null }
 ];
 
 // ============================================================

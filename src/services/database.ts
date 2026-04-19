@@ -1,4 +1,7 @@
 import postgres from 'postgres';
+import { DEFAULT_FEATURES, type ClientConfig, type ClientFeatures, type ClientSettings, type KnowledgeItem, type ClientQuestion } from '../types/client.js';
+
+export type { ClientConfig } from '../types/client.js';
 
 // ============================================================
 // DATABASE SERVICE
@@ -33,26 +36,26 @@ function parseJSON(value: any, fallback: any) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
 
-export function getDefaultFeatures() {
-  return {
-    ai_fallback: false,
-    lead_scoring: false,
-    handover_detection: false,
-    appointment_setting: false,
-    ai_conversation: false
-  };
+export function getDefaultFeatures(): ClientFeatures {
+  return { ...DEFAULT_FEATURES };
 }
 
 // Single place that maps a raw DB client row → typed client object.
 // All three client lookup functions use this.
-function parseClientRow(client: any) {
+function parseClientRow(row: any): ClientConfig {
   return {
-    ...client,
-    features: parseJSON(client.features, getDefaultFeatures()),
-    settings: parseJSON(client.settings, {}),
-    knowledge_base: parseJSON(client.knowledge_base, []),
-    questions: parseJSON(client.questions, []),
-    agent_phones: client.agent_phones || []
+    id: row.id,
+    phone_number_id: row.phone_number_id,
+    name: row.name || '',
+    industry: row.industry || 'generic',
+    active: row.active ?? true,
+    access_token: row.access_token || '',
+    verify_token: row.verify_token,
+    features: parseJSON(row.features, getDefaultFeatures()) as ClientFeatures,
+    settings: parseJSON(row.settings, {}) as ClientSettings,
+    knowledge_base: parseJSON(row.knowledge_base, []) as KnowledgeItem[],
+    questions: parseJSON(row.questions, []) as ClientQuestion[],
+    agent_phones: row.agent_phones || [],
   };
 }
 
@@ -60,14 +63,14 @@ function parseClientRow(client: any) {
 // CLIENT FUNCTIONS
 // ============================================================
 
-export async function getClientByPhoneNumberId(phoneNumberId: string) {
+export async function getClientByPhoneNumberId(phoneNumberId: string): Promise<ClientConfig | null> {
   try {
     const rows = await sql`SELECT * FROM clients WHERE phone_number_id = ${phoneNumberId} AND active = true LIMIT 1`;
     return rows[0] ? parseClientRow(rows[0]) : null;
   } catch (error) { console.error('❌ DB error:', error); return null; }
 }
 
-export async function getClientByShopifyDomain(domain: string) {
+export async function getClientByShopifyDomain(domain: string): Promise<ClientConfig | null> {
   try {
     const rows = await sql`
       SELECT * FROM clients
@@ -82,7 +85,7 @@ export async function getClientByShopifyDomain(domain: string) {
   } catch (error) { console.error('❌ DB error:', error); return null; }
 }
 
-export async function getClientById(clientId: string) {
+export async function getClientById(clientId: string): Promise<ClientConfig | null> {
   try {
     const rows = await sql`SELECT * FROM clients WHERE id = ${clientId} AND active = true LIMIT 1`;
     return rows[0] ? parseClientRow(rows[0]) : null;

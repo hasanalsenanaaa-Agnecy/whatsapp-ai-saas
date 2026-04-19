@@ -1,5 +1,6 @@
 // src/services/bookingWebhook.ts
 import { maskPhone } from '../utils/buttons.js';
+import type { ClientConfig } from '../types/client.js';
 
 interface BookingPayload {
   contact_type: 'whatsapp';
@@ -12,7 +13,7 @@ interface BookingPayload {
   service_id?: number;
 }
 
-export async function pushToBookingAPI(client: any, conv: any): Promise<boolean> {
+export async function pushToBookingAPI(client: ClientConfig, conv: any): Promise<boolean> {
   const bookingApi = client.settings?.booking_api;
   if (!bookingApi?.url || !bookingApi?.clinic_id) {
     console.error('❌ No booking_api config for client:', client.id);

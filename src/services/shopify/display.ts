@@ -13,6 +13,7 @@ import {
   sendWhatsAppList
 } from '../whatsapp.js';
 import { smartTitle, truncate } from '../../utils/buttons.js';
+import type { ClientConfig } from '../../types/client.js';
 import { msg, type ShopifyAgentConfig, type ConversationState, type CartItem } from './types.js';
 import { smartVariantTitle } from './helpers.js';
 
@@ -23,7 +24,7 @@ import { smartVariantTitle } from './helpers.js';
 // ============================================================
 
 export async function showVariantOrProductView(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   accessToken: string,
@@ -76,7 +77,7 @@ export async function showVariantOrProductView(
 // ============================================================
 
 export async function showProductView(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   accessToken: string,
@@ -149,7 +150,7 @@ export async function showProductView(
 // ============================================================
 
 export async function showProductList(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   _config: ShopifyAgentConfig,
   accessToken: string
@@ -210,7 +211,7 @@ export async function showProductList(
 // ============================================================
 
 export async function showProductNames(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   accessToken: string
@@ -308,7 +309,7 @@ export async function showProductNames(
 // ============================================================
 
 export async function showCart(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   accessToken: string
@@ -353,7 +354,7 @@ export async function showCart(
 }
 
 export async function showCartForRemoval(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   accessToken: string
@@ -410,7 +411,7 @@ export async function showCartForRemoval(
 // ============================================================
 
 export async function askQuantity(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   _config: ShopifyAgentConfig,
   accessToken: string,
@@ -436,7 +437,7 @@ export async function askQuantity(
 // ============================================================
 
 export async function showTopProducts(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   accessToken: string,

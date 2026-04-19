@@ -9,6 +9,7 @@ import {
   sendWhatsAppButtons
 } from '../whatsapp.js';
 import { emitEvent } from '../events.js';
+import type { ClientConfig } from '../../types/client.js';
 import { msg, AI_QUESTION_BUDGET, type ShopifyAgentConfig, type ConversationState } from './types.js';
 import { isQuestionMessage } from './helpers.js';
 
@@ -74,12 +75,12 @@ ${productList}`;
 // ============================================================
 
 export async function tryAIAnswer(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
   accessToken: string,
-  notifyOwner: (client: any, conv: ConversationState, config: ShopifyAgentConfig, type: 'paid' | 'help' | 'urgent' | 'unverified', accessToken: string) => Promise<void>
+  notifyOwner: (client: ClientConfig, conv: ConversationState, config: ShopifyAgentConfig, type: 'paid' | 'help' | 'urgent' | 'unverified', accessToken: string) => Promise<void>
 ): Promise<boolean> {
   if (!isQuestionMessage(message)) return false;
 

@@ -31,6 +31,7 @@ import {
 import { pushToBookingAPI } from '../services/bookingWebhook.js';
 import { normalizeArabicNumbers, maskPhone } from '../utils/buttons.js';
 import { emitEvent } from '../services/events.js';
+import type { ClientConfig, ClientFeatures } from '../types/client.js';
 
 // ============================================================
 // TYPES (re-exported for use by other flows)
@@ -47,13 +48,7 @@ export interface ConversationState {
   updatedAt: string;
 }
 
-export interface ClientFeatures {
-  ai_fallback: boolean;
-  lead_scoring: boolean;
-  handover_detection: boolean;
-  appointment_setting: boolean;
-  ai_conversation: boolean;
-}
+export type { ClientFeatures };
 
 export { detectHandoverIntent, isAIConversationAvailable };
 
@@ -119,7 +114,7 @@ const INTENT_AGENT_NOTIFICATIONS: Record<string, string> = {
 // ============================================================
 
 export async function handleWelcome(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   message: string,
   messages: ClientMessages,
@@ -156,7 +151,7 @@ export async function handleWelcome(
 }
 
 export async function handleQuestions(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   message: string,
   messages: ClientMessages,
@@ -215,7 +210,7 @@ export async function handleQuestions(
 }
 
 export async function handleAppointmentDate(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   message: string,
   messages: ClientMessages,
@@ -238,7 +233,7 @@ export async function handleAppointmentDate(
 }
 
 export async function handleAppointmentTime(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   message: string,
   messages: ClientMessages,
@@ -265,7 +260,7 @@ export async function handleAppointmentTime(
 }
 
 export async function handleChat(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   message: string,
   _messages: ClientMessages,
@@ -329,7 +324,7 @@ function checkAIBudget(conv: ConversationState): boolean {
 // ============================================================
 
 export async function handleAIConversation(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   message: string,
   features: ClientFeatures,
@@ -430,7 +425,7 @@ export async function handleAIConversation(
 // ============================================================
 
 export async function handleAIFallback(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   message: string,
   accessToken: string
@@ -476,7 +471,7 @@ export async function handleAIFallback(
 // ============================================================
 
 export async function handleHandoverRequest(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   message: string,
   messages: ClientMessages,
@@ -507,7 +502,7 @@ export async function handleHandoverRequest(
 // HELPER FUNCTIONS
 // ============================================================
 
-export async function sendQuestion(client: any, conv: ConversationState, messages: ClientMessages, accessToken: string): Promise<void> {
+export async function sendQuestion(client: ClientConfig, conv: ConversationState, messages: ClientMessages, accessToken: string): Promise<void> {
   const questions = messages.questions || [];
   const question = questions[conv.step];
   if (!question) return;
@@ -532,7 +527,7 @@ export async function sendQuestion(client: any, conv: ConversationState, message
 }
 
 export async function startAppointmentFlow(
-  client: any, conv: ConversationState, messages: ClientMessages,
+  client: ClientConfig, conv: ConversationState, messages: ClientMessages,
   appointmentSettings: AppointmentSettings, accessToken: string
 ): Promise<void> {
   conv.state = 'appointment_date';
@@ -540,7 +535,7 @@ export async function startAppointmentFlow(
 }
 
 export async function sendAppointmentDateOptions(
-  client: any, conv: ConversationState, messages: ClientMessages,
+  client: ClientConfig, conv: ConversationState, messages: ClientMessages,
   appointmentSettings: AppointmentSettings, accessToken: string
 ): Promise<void> {
   const dates = getAvailableDates(appointmentSettings);
@@ -553,7 +548,7 @@ export async function sendAppointmentDateOptions(
 }
 
 export async function sendAppointmentTimeOptions(
-  client: any, conv: ConversationState, messages: ClientMessages,
+  client: ClientConfig, conv: ConversationState, messages: ClientMessages,
   appointmentSettings: AppointmentSettings, accessToken: string
 ): Promise<void> {
   const slots = getTimeSlots(appointmentSettings);
@@ -570,7 +565,7 @@ export async function sendAppointmentTimeOptions(
 // ============================================================
 
 export async function completeLead(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   messages: ClientMessages,
   features: ClientFeatures,

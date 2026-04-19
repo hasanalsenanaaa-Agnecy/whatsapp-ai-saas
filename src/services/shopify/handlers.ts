@@ -14,6 +14,7 @@ import {
 } from '../whatsapp.js';
 import { normalizeArabicNumbers } from '../../utils/buttons.js';
 import { emitEvent } from '../events.js';
+import type { ClientConfig } from '../../types/client.js';
 import { msg, type ShopifyAgentConfig, type ConversationState, type CartItem } from './types.js';
 import {
   fetchProductsCached,
@@ -49,7 +50,7 @@ import { tryAIAnswer } from './ai.js';
 // ============================================================
 
 export async function handleShopifyAgent(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   message: string,
   accessToken: string
@@ -177,7 +178,7 @@ export async function handleShopifyAgent(
 // ============================================================
 
 async function handleWelcome(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -403,7 +404,7 @@ async function handleWelcome(
 // ============================================================
 
 async function handleBrowseChoice(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -477,7 +478,7 @@ async function handleBrowseChoice(
 // ============================================================
 
 async function handleImageBrowse(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -518,7 +519,7 @@ async function handleImageBrowse(
 // ============================================================
 
 async function handleCatalogSelection(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -594,7 +595,7 @@ async function handleCatalogSelection(
 // ============================================================
 
 async function handleProductView(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -660,7 +661,7 @@ async function handleProductView(
 // ============================================================
 
 async function handleVariantSelect(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -688,7 +689,7 @@ async function handleVariantSelect(
 // ============================================================
 
 async function handleQuantitySelect(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -770,7 +771,7 @@ async function handleQuantitySelect(
 // ============================================================
 
 async function handleCart(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -823,7 +824,7 @@ async function handleCart(
 // ============================================================
 
 async function handleCartRemove(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -875,7 +876,7 @@ async function handleCartRemove(
 // ============================================================
 
 async function handlePaymentConfirmation(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -1003,7 +1004,7 @@ async function handlePaymentConfirmation(
 // ============================================================
 
 async function handleOrderComplete(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -1053,7 +1054,7 @@ async function handleOrderComplete(
 // ============================================================
 
 async function handleDone(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -1074,7 +1075,7 @@ async function handleDone(
 // ============================================================
 
 async function handleOrderStatus(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   message: string,
@@ -1173,7 +1174,7 @@ async function handleOrderStatus(
 // ============================================================
 
 async function handleCustomerService(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   _message: string,
@@ -1208,7 +1209,7 @@ async function handleCustomerService(
 // ============================================================
 
 async function processCheckout(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   accessToken: string
@@ -1311,7 +1312,7 @@ async function processCheckout(
 // ============================================================
 
 async function notifyOwner(
-  client: any,
+  client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
   type: 'paid' | 'help' | 'urgent' | 'unverified',

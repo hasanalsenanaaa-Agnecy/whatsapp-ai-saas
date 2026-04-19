@@ -8,6 +8,7 @@ import {
   type ShopifyProduct
 } from '../shopify.js';
 import { smartTitle, truncate } from '../../utils/buttons.js';
+import type { ClientConfig } from '../../types/client.js';
 import { msg, type ShopifyAgentConfig, type ConversationState, type CartItem, type ShopifyAdminOrder } from './types.js';
 
 // ============================================================
@@ -32,7 +33,7 @@ export async function fetchProductsCached(domain: string, storefrontToken?: stri
 // CONFIGURATION
 // ============================================================
 
-export function getShopifyAgentConfig(client: any): ShopifyAgentConfig | null {
+export function getShopifyAgentConfig(client: ClientConfig): ShopifyAgentConfig | null {
   const domain = client.settings?.shopify_domain || client.settings?.shopify?.domain;
   if (!domain) return null;
 

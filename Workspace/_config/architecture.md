@@ -8,55 +8,64 @@ Multi-tenant WhatsApp automation platform. One codebase serves all clients. Clie
 
 ```
 WhatsApp user sends message
-  → Meta webhook POST /webhook
-  → src/index.ts (validates, parses)
+  → Meta webhook POST /webhook/whatsapp
+  → src/index.ts (validates signature, deduplicates, rate-limits)
   → src/conversation.ts (routes by client industry + conversation state)
-  → src/flows/{industry}.ts (executes the right step)
-  → src/messages.ts (formats the response)
-  → WhatsApp API (sends reply)
+  → src/flows/{common,ecommerce}.ts (executes the right step)
+  → src/services/whatsapp.ts (sends reply via Meta API)
 ```
 
 ## Key files and their jobs
 
 | File | Responsibility |
 |------|----------------|
-| `src/index.ts` | Fastify server. Handles webhooks: WhatsApp, Shopify, appointment reminders. |
-| `src/conversation.ts` | State machine router. Reads Redis state, picks the right flow handler, calls it. |
+| `src/index.ts` | Fastify server. Webhooks: WhatsApp, Shopify, cron endpoints, analytics API. |
+| `src/conversation.ts` | State machine router. Reads DB state, picks the right flow handler, calls it. |
 | `src/messages.ts` | All WhatsApp message templates. Gulf Arabic. Button labels, list items, body text. |
-| `src/flows/clinic.ts` | Clinic booking flow (appointment, services, location). |
-| `src/flows/real-estate.ts` | Real estate lead capture flow. |
-| `src/flows/ecommerce.ts` | Shopify e-commerce flow (browse, cart, checkout). |
-| `src/flows/common.ts` | Shared flow logic (lead handover, AI fallback, returning customers). |
-| `src/services/database.ts` | All PostgreSQL queries. Every query is scoped by clientId. |
-| `src/services/whatsapp.ts` | Meta WhatsApp API calls (send message, send template, upload media). |
-| `src/services/ai.ts` | Claude API calls. Only called for fallback or Q&A. |
-| `src/services/appointments.ts` | Appointment booking, availability, QStash reminder scheduling. |
-| `src/services/shopify.ts` | Shopify product fetching and order creation. |
-| `src/scripts/` | CLI tools for adding clients, setting tiers, enabling features. |
-| `src/cron/` | Scheduled tasks (appointment reminders). |
+| `src/flows/ecommerce.ts` | Shopify e-commerce entry point (delegates to shopify agent). |
+| `src/flows/common.ts` | Shared flow logic: welcome, questions, appointments, AI fallback, chat, handover, lead completion. |
+| `src/types/client.ts` | `ClientConfig` type contract — typed interface for all tenant configuration. |
+| `src/services/database.ts` | All PostgreSQL queries. Every query scoped by clientId. Returns typed `ClientConfig`. |
+| `src/services/whatsapp.ts` | Meta WhatsApp API calls (messages, buttons, lists, images). |
+| `src/services/shopify.ts` | Shopify Storefront API (product fetching, checkout creation). |
+| `src/services/shopify-webhook.ts` | Shopify orders/paid webhook handler (payment verification). |
+| `src/services/shopify/` | Shopify agent modules: handlers.ts, display.ts, ai.ts, helpers.ts, types.ts. |
+| `src/services/knowledge.ts` | AI knowledge base, lead scoring, handover detection. |
+| `src/services/ai-conversation.ts` | Claude API for free-form AI conversations. |
+| `src/services/events.ts` | Fire-and-forget event logging (analytics foundation). |
+| `src/services/analytics.ts` | Revenue attribution, conversion funnel, usage summary queries. |
+| `src/services/appointments.ts` | Appointment booking, date generation, reminder scheduling. |
+| `src/services/rateLimiter.ts` | Per-phone rate limiting (10 msg/min). |
+| `src/services/googleSheets.ts` | Google Sheets lead sync. |
+| `src/services/alerts.ts` | Owner notifications via WhatsApp. |
+| `src/scripts/` | CLI tools: add clients, set tiers, enable features, revenue reports. |
+| `src/cron/reminders.ts` | Appointment reminder cron job. |
+| `src/cron/abandoned-cart.ts` | Abandoned cart recovery cron job. |
 
 ## State machine pattern
 
-Conversation state lives in Upstash Redis keyed by `{phoneNumberId}:{userPhone}`.
+Conversation state lives in **Neon PostgreSQL** in the `conversations` table, keyed by `(client_id, phone)`.
 
 State object shape:
 ```typescript
 {
-  step: string          // current step in the flow (e.g., 'MENU', 'SERVICES', 'CONFIRM')
-  industry: string      // 'clinic' | 'real-estate' | 'ecommerce'
-  clientId: string      // which client owns this conversation
-  data: object          // accumulated lead/booking data
-  lastActivity: number  // Unix timestamp for expiry
+  clientId: string;       // which client owns this conversation
+  phone: string;          // customer WhatsApp number
+  state: string;          // current state (welcome, questions, shopify_agent, etc.)
+  step: number;           // sub-step within current state
+  data: Record<string, any>; // accumulated lead/booking/cart data
+  messages: { role: string; content: string }[]; // conversation history
+  createdAt: string;
+  updatedAt: string;
 }
 ```
 
-Flows transition state by returning a new step. `conversation.ts` persists the new state to Redis and sends the reply.
+Flows transition state by modifying `conv.state` and `conv.data`. `conversation.ts` persists the updated state to the DB after each message.
 
 ## Industry flows
 
-- **Clinic**: Lead capture → service selection → appointment booking → confirmation → reminder
-- **Real estate**: Lead capture → property preferences → agent notification → handover
-- **Ecommerce (Shopify)**: Product catalog → product detail → add to cart → checkout → order creation
+- **Ecommerce (Shopify)**: Welcome → browse (images/list) → product detail → variant select → quantity → cart → checkout → payment verification → completion
+- **Common (all industries)**: Welcome → screening questions → appointment booking → AI fallback → chat → handover
 
 ## Pricing tiers (enforced in code)
 
@@ -70,11 +79,12 @@ Feature gates are checked in `conversation.ts` and individual flow files using `
 
 ## Database schema (key tables)
 
-- `clients` — client configuration, tier, industry, feature flags
-- `conversations` — conversation history (used for AI context)
-- `leads` — captured lead data
-- `appointments` — booked appointments
+- `clients` — client configuration, tier, industry, feature flags, settings (JSONB)
+- `conversations` — conversation state + history (upserted per client_id + phone)
+- `leads` — captured lead data with scoring
+- `appointments` — booked appointments with reminders
+- `events` — analytics event log (message_in/out, checkout, payment, AI calls, escalations)
 
 ## Multi-tenancy enforcement
 
-Every database query includes `WHERE client_id = $X`. No exceptions. The `clientId` is resolved from the incoming webhook's `phoneNumberId` at the start of every request.
+Every database query includes `WHERE client_id = $X`. No exceptions. The `clientId` is resolved from the incoming webhook's `phoneNumberId` at the start of every request. Client configuration is typed via the `ClientConfig` interface in `src/types/client.ts`.

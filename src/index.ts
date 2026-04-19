@@ -5,12 +5,14 @@ import { initDatabase, getClientByPhoneNumberId } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
 import { handleReminderCron } from './cron/reminders.js';
+import { handleAbandonedCartCron } from './cron/abandoned-cart.js';
 import { handleShopifyWebhook } from './services/shopify-webhook.js';
 import { checkRateLimit } from './services/rateLimiter.js';
 import { maskPhone } from './utils/buttons.js';
 import crypto from 'crypto';
 import { sendAlert, alertError } from './services/alerts.js';
 import { emitEvent } from './services/events.js';
+import { getRevenueByClient, getConversionFunnel, getUsageSummary } from './services/analytics.js';
 
 // ============================================================
 // STARTUP VALIDATION — fail fast before the server accepts traffic
@@ -142,6 +144,26 @@ function verifyWebhookSignature(rawBody: string, signature: string, secret: stri
 fastify.get('/', async () => ({ service: 'WhatsApp AI Receptionist', status: 'running', version: '3.0.0' }));
 fastify.get('/health', async () => ({ status: 'healthy', uptime: process.uptime() }));
 
+// Analytics API — protected by ANALYTICS_KEY env var
+fastify.get('/api/analytics/revenue', async (request, reply) => {
+  const query = request.query as any;
+  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
+  return getRevenueByClient(query.client_id, parseInt(query.months) || 3);
+});
+
+fastify.get('/api/analytics/funnel', async (request, reply) => {
+  const query = request.query as any;
+  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
+  if (!query.client_id) return reply.code(400).send({ error: 'client_id required' });
+  return getConversionFunnel(query.client_id, parseInt(query.months) || 3);
+});
+
+fastify.get('/api/analytics/usage', async (request, reply) => {
+  const query = request.query as any;
+  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
+  return getUsageSummary(query.client_id, parseInt(query.months) || 3);
+});
+
 // WhatsApp webhook verification
 fastify.get('/webhook/whatsapp', async (request, reply) => {
   const query = request.query as any;
@@ -208,6 +230,11 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
 // Cron endpoint for appointment reminders
 fastify.post('/cron/reminders', async (request, reply) => {
   await handleReminderCron(request, reply);
+});
+
+// Cron endpoint for abandoned cart recovery
+fastify.post('/cron/abandoned-cart', async (request, reply) => {
+  await handleAbandonedCartCron(request, reply);
 });
 
 // Shopify orders/paid webhook

@@ -107,8 +107,7 @@ export async function handleShopifyWebhook(
     console.error(`Shopify webhook: no client found for domain ${shopDomain}`);
     return;
   }
-  // Cast to any since DB returns dynamic shape (same pattern as shopify-agent.ts)
-  const client = clientRaw as any;
+  const client = clientRaw;
 
   // Verify HMAC signature — required in production
   const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET || client.settings?.shopify_webhook_secret || client.settings?.shopify?.webhook_secret;
