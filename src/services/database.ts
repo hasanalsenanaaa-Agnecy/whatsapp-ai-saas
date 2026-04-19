@@ -1,5 +1,6 @@
 import postgres from 'postgres';
 import { DEFAULT_FEATURES, type ClientConfig, type ClientFeatures, type ClientSettings, type KnowledgeItem, type ClientQuestion } from '../types/client.js';
+import { decryptSettings } from '../utils/crypto.js';
 
 export type { ClientConfig } from '../types/client.js';
 
@@ -52,7 +53,7 @@ function parseClientRow(row: any): ClientConfig {
     access_token: row.access_token || '',
     verify_token: row.verify_token,
     features: parseJSON(row.features, getDefaultFeatures()) as ClientFeatures,
-    settings: parseJSON(row.settings, {}) as ClientSettings,
+    settings: decryptSettings(parseJSON(row.settings, {})) as ClientSettings,
     knowledge_base: parseJSON(row.knowledge_base, []) as KnowledgeItem[],
     questions: parseJSON(row.questions, []) as ClientQuestion[],
     agent_phones: row.agent_phones || [],

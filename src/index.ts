@@ -7,12 +7,12 @@ import { handleIncomingMessage } from './conversation.js';
 import { handleReminderCron } from './cron/reminders.js';
 import { handleAbandonedCartCron } from './cron/abandoned-cart.js';
 import { handleShopifyWebhook } from './services/shopify-webhook.js';
-import { checkRateLimit } from './services/rateLimiter.js';
+import { checkRateLimit, checkTenantRateLimit } from './services/rateLimiter.js';
 import { maskPhone } from './utils/buttons.js';
 import crypto from 'crypto';
 import { sendAlert, alertError } from './services/alerts.js';
 import { emitEvent } from './services/events.js';
-import { getRevenueByClient, getConversionFunnel, getUsageSummary } from './services/analytics.js';
+import { getRevenueByClient, getConversionFunnel, getUsageSummary, getTopProducts, getAICostSummary } from './services/analytics.js';
 
 // ============================================================
 // STARTUP VALIDATION — fail fast before the server accepts traffic
@@ -164,6 +164,19 @@ fastify.get('/api/analytics/usage', async (request, reply) => {
   return getUsageSummary(query.client_id, parseInt(query.months) || 3);
 });
 
+fastify.get('/api/analytics/products', async (request, reply) => {
+  const query = request.query as any;
+  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
+  if (!query.client_id) return reply.code(400).send({ error: 'client_id required' });
+  return getTopProducts(query.client_id, parseInt(query.months) || 3, parseInt(query.limit) || 10);
+});
+
+fastify.get('/api/analytics/ai-cost', async (request, reply) => {
+  const query = request.query as any;
+  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
+  return getAICostSummary(query.client_id, parseInt(query.months) || 3);
+});
+
 // WhatsApp webhook verification
 fastify.get('/webhook/whatsapp', async (request, reply) => {
   const query = request.query as any;
@@ -213,6 +226,12 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
       const client = await getClientByPhoneNumberId(phoneNumberId);
       if (!client) {
         console.error('No client found for: ' + phoneNumberId);
+        return;
+      }
+
+      // Per-tenant rate limit (200 msg/min default — prevents one client from exhausting WhatsApp API)
+      if (!checkTenantRateLimit(client.id)) {
+        console.warn(`Tenant rate limit exceeded for client ${client.id}`);
         return;
       }
 

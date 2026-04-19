@@ -2,6 +2,7 @@ import 'dotenv/config';
 import postgres from 'postgres';
 import axios from 'axios';
 import * as readline from 'readline';
+import { encryptSettings } from '../utils/crypto.js';
 
 // Database connection
 const sql = postgres(process.env.DATABASE_URL!);
@@ -60,9 +61,9 @@ async function addClient() {
   const nameEn = await prompt('Business name (English, for ID): ');
   
   // Industry
-  console.log('\nIndustries: real_estate, clinic, car_dealership, driving_school, home_services, generic, shopify');
+  console.log('\nIndustries: ecommerce, real_estate, clinic, car_dealership, driving_school, home_services, generic');
   const industry = await prompt('Industry: ');
-  if (!['real_estate', 'clinic', 'car_dealership', 'driving_school', 'home_services', 'generic', 'shopify'].includes(industry)) {
+  if (!['ecommerce', 'real_estate', 'clinic', 'car_dealership', 'driving_school', 'home_services', 'generic'].includes(industry)) {
     console.log('❌ Invalid industry'); return;
   }
 
@@ -105,32 +106,56 @@ async function addClient() {
     questions = await collectCustomQuestions();
   }
 
-  // Shopify credentials (if applicable)
+  // Shopify / ecommerce credentials
   let shopifySettings: Record<string, unknown> = {};
-  if (industry === 'shopify') {
-    console.log('\n── Shopify Credentials ──');
+  if (industry === 'ecommerce') {
+    console.log('\n── Shopify Store Setup ──');
     const shopifyDomain = await prompt('Shopify store domain (e.g. my-store.myshopify.com): ');
     if (!shopifyDomain) { console.log('❌ Shopify domain required'); return; }
+
     const storefrontToken = await prompt('Storefront Access Token: ');
     if (!storefrontToken) { console.log('❌ Storefront Access Token required'); return; }
+
+    const adminToken = await prompt('Admin API Access Token (optional, for order lookup): ');
+    const webhookSecret = await prompt('Shopify Webhook Secret (optional, for payment verification): ');
+
+    console.log('\nCurrencies: SAR, KWD, AED, BHD, OMR, QAR, USD');
+    const currency = await prompt('Store currency [SAR]: ') || 'SAR';
+
     shopifySettings = {
       domain: shopifyDomain.trim(),
       storefrontToken: storefrontToken.trim(),
-      currency: 'SAR',
-      notifyOnOrder: true
+      ...(adminToken ? { adminToken: adminToken.trim() } : {}),
+      ...(webhookSecret ? { webhookSecret: webhookSecret.trim() } : {}),
     };
+
+    // Also set flat keys for backward compat
+    Object.assign(shopifySettings, {
+      _shopify_domain: shopifyDomain.trim(),
+      _currency: currency.toUpperCase(),
+    });
   }
 
   // Generate IDs
   const clientId = generateClientId(nameEn || name);
   const verifyToken = generateVerifyToken();
 
+  // Currency (set from Shopify flow or default)
+  const storeCurrency = industry === 'ecommerce'
+    ? (shopifySettings._currency as string || 'SAR')
+    : undefined;
+  delete shopifySettings._shopify_domain;
+  delete shopifySettings._currency;
+
   // Settings (matches your DB schema)
   const settings: Record<string, unknown> = {
     welcome_message: `مرحباً بك في ${name}! 👋\n\nكيف نقدر نخدمك اليوم؟`,
     thank_you_message: 'شكراً لك! ✅\n\nتم استلام طلبك وسيتواصل معك أحد ممثلينا قريباً.',
-    agent_name: 'الوكيل',
-    ...(industry === 'shopify' ? { shopify: shopifySettings } : {})
+    ...(industry === 'ecommerce' ? {
+      shopify: shopifySettings,
+      shopify_domain: (shopifySettings as any).domain,
+      currency: storeCurrency,
+    } : {})
   };
 
   // Summary
@@ -151,7 +176,9 @@ async function addClient() {
   const confirm = await prompt('\n✅ Save client? (yes/no): ');
   if (confirm !== 'yes') { console.log('Cancelled.'); return; }
 
-      // Insert
+  // Encrypt sensitive tokens before storing
+  const encryptedSettings = encryptSettings(settings);
+
   try {
     await sql`
       INSERT INTO clients (
@@ -159,7 +186,7 @@ async function addClient() {
         verify_token, agent_phones, questions, settings, messages, active, created_at
       ) VALUES (
         ${clientId}, ${name}, ${industry}, ${phoneNumberId}, ${accessToken},
-        ${verifyToken}, ${[agentPhones]}, ${JSON.stringify(questions)}, ${JSON.stringify(settings)},
+        ${verifyToken}, ${[agentPhones]}, ${JSON.stringify(questions)}, ${JSON.stringify(encryptedSettings)},
         ${JSON.stringify({})}, true, NOW()
       )
     `;

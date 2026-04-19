@@ -1,13 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk';
-
 // ============================================================
 // KNOWLEDGE BASE AI SYSTEM
 // Gulf Arabic responses, lead scoring, handover detection
 // ============================================================
 
-const anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-  : null;
+import { getAIClient, isAIAvailable, AI_MODEL } from './ai-client.js';
 
 export interface KnowledgeItem {
   category: string;
@@ -19,6 +15,8 @@ export interface AIResponse {
   answer: string;
   confident: boolean;
   suggestHandover: boolean;
+  durationMs?: number;
+  tokensUsed?: number;
 }
 
 export interface ConversationMessage {
@@ -50,9 +48,7 @@ const SYSTEM_PROMPT = `أنت مسؤول مبيعات محترف لـ {businessN
 /**
  * Check if AI service is available
  */
-export function isAIAvailable(): boolean {
-  return anthropic !== null;
-}
+export { isAIAvailable };
 
 /**
  * Generate AI response using knowledge base
@@ -65,7 +61,7 @@ export async function generateKnowledgeResponse(
   userMessage: string,
   customSystemPrompt?: string
 ): Promise<AIResponse> {
-  // If no API key, return graceful fallback
+  const anthropic = getAIClient();
   if (!anthropic) {
     console.warn('⚠️ Anthropic API key not configured');
     return {
@@ -139,19 +135,21 @@ export async function generateKnowledgeResponse(
       { role: 'user' as const, content: userMessage }
     ];
 
-    // Call Claude with timeout
+    // Call Claude with timeout + timing
+    const startTime = Date.now();
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('AI timeout')), 12_000)
     );
     const response = await Promise.race([
       anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+        model: AI_MODEL,
         max_tokens: 300,
         system: systemPrompt,
         messages
       }),
       timeout
     ]);
+    const durationMs = Date.now() - startTime;
 
     const textBlock = response.content.find(block => block.type === 'text');
     const answer = textBlock?.type === 'text' ? textBlock.text.trim() : '';
@@ -163,7 +161,9 @@ export async function generateKnowledgeResponse(
     return {
       answer: answer || 'عذراً، ما قدرت أفهم. خليني أكمل معك.',
       confident: !suggestHandover,
-      suggestHandover
+      suggestHandover,
+      durationMs,
+      tokensUsed: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0),
     };
 
   } catch (error: any) {

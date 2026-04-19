@@ -197,3 +197,104 @@ export async function getUsageSummary(
     payments: parseInt(r.payments) || 0,
   }));
 }
+
+// ── Top products by checkout frequency ──────────────────────
+
+export interface TopProduct {
+  title: string;
+  total_qty: number;
+  checkout_count: number;
+}
+
+/**
+ * Most-checked-out products for a client.
+ * Reads the `products` array from checkout_created events.
+ */
+export async function getTopProducts(
+  clientId: string,
+  months = 3,
+  limit = 10
+): Promise<TopProduct[]> {
+  const since = new Date();
+  since.setMonth(since.getMonth() - months);
+
+  const rows = await sql`
+    SELECT
+      p->>'title' AS title,
+      SUM((p->>'qty')::int) AS total_qty,
+      COUNT(*) AS checkout_count
+    FROM events,
+      jsonb_array_elements(data->'products') AS p
+    WHERE client_id = ${clientId}
+      AND event_type = 'checkout_created'
+      AND created_at >= ${since.toISOString()}
+      AND data ? 'products'
+    GROUP BY p->>'title'
+    ORDER BY total_qty DESC
+    LIMIT ${limit}
+  `;
+
+  return rows.map(r => ({
+    title: r.title,
+    total_qty: parseInt(r.total_qty) || 0,
+    checkout_count: parseInt(r.checkout_count) || 0,
+  }));
+}
+
+// ── AI cost tracking ────────────────────────────────────────
+
+export interface AICostSummary {
+  client_id: string;
+  period: string;
+  total_calls: number;
+  total_tokens: number;
+  avg_duration_ms: number;
+}
+
+/**
+ * AI usage per client per month — tokens consumed and avg latency.
+ */
+export async function getAICostSummary(
+  clientId?: string,
+  months = 3
+): Promise<AICostSummary[]> {
+  const since = new Date();
+  since.setMonth(since.getMonth() - months);
+
+  const rows = clientId
+    ? await sql`
+        SELECT
+          client_id,
+          TO_CHAR(created_at, 'YYYY-MM') AS period,
+          COUNT(*) AS total_calls,
+          COALESCE(SUM((data->>'tokens')::int), 0) AS total_tokens,
+          COALESCE(AVG((data->>'duration_ms')::int), 0) AS avg_duration_ms
+        FROM events
+        WHERE event_type = 'ai_call'
+          AND client_id = ${clientId}
+          AND created_at >= ${since.toISOString()}
+        GROUP BY client_id, period
+        ORDER BY period DESC
+      `
+    : await sql`
+        SELECT
+          client_id,
+          TO_CHAR(created_at, 'YYYY-MM') AS period,
+          COUNT(*) AS total_calls,
+          COALESCE(SUM((data->>'tokens')::int), 0) AS total_tokens,
+          COALESCE(AVG((data->>'duration_ms')::int), 0) AS avg_duration_ms
+        FROM events
+        WHERE event_type = 'ai_call'
+          AND created_at >= ${since.toISOString()}
+        GROUP BY client_id, period
+        ORDER BY period DESC
+      `;
+
+  return rows.map(r => ({
+    client_id: r.client_id,
+    period: r.period,
+    total_calls: parseInt(r.total_calls) || 0,
+    total_tokens: parseInt(r.total_tokens) || 0,
+    avg_duration_ms: Math.round(parseFloat(r.avg_duration_ms) || 0),
+  }));
+}

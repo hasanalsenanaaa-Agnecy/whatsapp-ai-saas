@@ -1268,7 +1268,12 @@ async function processCheckout(
     totalPrice: cartTotalStr,  // Use cart-calculated total, not Shopify API
     currency: checkout.currency
   };
-  emitEvent(client.id, 'checkout_created', conv.phone, { items: cart.length, total: cartTotalStr, currency: checkout.currency });
+  emitEvent(client.id, 'checkout_created', conv.phone, {
+    items: cart.length,
+    total: cartTotalStr,
+    currency: checkout.currency,
+    products: cart.map((i: any) => ({ title: i.productTitle, variant: i.variantTitle, qty: i.quantity || 1, price: i.price }))
+  });
 
   // Build cart summary for payment message
   let cartSummary = '';

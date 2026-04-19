@@ -2,28 +2,26 @@
 // SHOPIFY AGENT — AI question answering via Claude
 // ============================================================
 
-import Anthropic from '@anthropic-ai/sdk';
 import { formatPrice, type ShopifyProduct } from '../shopify.js';
 import {
   sendWhatsAppMessage,
   sendWhatsAppButtons
 } from '../whatsapp.js';
 import { emitEvent } from '../events.js';
+import { getAIClient, AI_MODEL } from '../ai-client.js';
 import type { ClientConfig } from '../../types/client.js';
 import { msg, AI_QUESTION_BUDGET, type ShopifyAgentConfig, type ConversationState } from './types.js';
 import { isQuestionMessage } from './helpers.js';
 
 // ============================================================
-// MODULE-LEVEL ANTHROPIC CLIENT
-// ============================================================
-
-const _anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-  : null;
-
-// ============================================================
 // AI ANSWER — call Claude with product context
 // ============================================================
+
+interface AIAnswerResult {
+  answer: string;
+  durationMs: number;
+  tokensUsed: number;
+}
 
 async function answerWithAI(
   question: string,
@@ -32,7 +30,8 @@ async function answerWithAI(
   currency: string | undefined,
   history: { role: string; content: string }[],
   customSystemPrompt?: string
-): Promise<string | null> {
+): Promise<AIAnswerResult | null> {
+  const _anthropic = getAIClient();
   if (!_anthropic) return null;
 
   const productList = products.map(p => {
@@ -56,18 +55,22 @@ ${productList}`;
     const recent = history.slice(-6).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
     recent.push({ role: 'user', content: question });
 
+    const startTime = Date.now();
     const response = await Promise.race([
       _anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+        model: AI_MODEL,
         max_tokens: 150,
         system,
         messages: recent
       }),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10_000))
     ]);
+    const durationMs = Date.now() - startTime;
+    const tokensUsed = (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0);
 
     const block = (response as any).content?.find((b: any) => b.type === 'text');
-    return block?.text?.trim() || null;
+    const answer = block?.text?.trim();
+    return answer ? { answer, durationMs, tokensUsed } : null;
   } catch {
     return null;
   }
@@ -112,12 +115,12 @@ export async function tryAIAnswer(
   }
 
   const products: ShopifyProduct[] = conv.data._products || [];
-  const answer = await answerWithAI(message, products, config.storeName, config.currency, conv.messages, client.settings?.system_prompt);
-  if (!answer) return false;
+  const result = await answerWithAI(message, products, config.storeName, config.currency, conv.messages, client.settings?.system_prompt);
+  if (!result) return false;
 
-  emitEvent(client.id, 'ai_call', conv.phone, { source: 'shopify_agent', questionNum: count + 1 });
+  emitEvent(client.id, 'ai_call', conv.phone, { source: 'shopify_agent', questionNum: count + 1, duration_ms: result.durationMs, tokens: result.tokensUsed });
   conv.data._aiAnswerCount = count + 1;
-  await sendWhatsAppMessage(conv.phone, answer, accessToken, client.phone_number_id);
+  await sendWhatsAppMessage(conv.phone, result.answer, accessToken, client.phone_number_id);
 
   // First answer only — soft CTA to browse
   if (count === 0) {

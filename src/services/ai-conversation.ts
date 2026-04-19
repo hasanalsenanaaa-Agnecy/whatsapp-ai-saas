@@ -1,17 +1,13 @@
-import Anthropic from '@anthropic-ai/sdk';
-
 // ============================================================
 // AI-DRIVEN CONVERSATION SERVICE
 // Replaces rigid state machine with natural AI-guided flow.
 // AI collects data, triggers WhatsApp buttons via tags.
 // ============================================================
 
-const anthropic = process.env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-  : null;
+import { getAIClient, isAIAvailable, AI_MODEL } from './ai-client.js';
 
 export function isAIConversationAvailable(): boolean {
-  return anthropic !== null;
+  return isAIAvailable();
 }
 
 // ============================================================
@@ -185,6 +181,8 @@ ${stateText}`;
 export interface AIConversationResult {
   parsed: ParsedAIResponse;
   rawResponse: string;
+  durationMs?: number;
+  tokensUsed?: number;
 }
 
 export async function getAIResponse(
@@ -192,6 +190,7 @@ export async function getAIResponse(
   conversationHistory: { role: string; content: string }[],
   userMessage: string
 ): Promise<AIConversationResult> {
+  const anthropic = getAIClient();
   if (!anthropic) {
     return {
       parsed: { text: 'عذراً، الخدمة غير متوفرة حالياً.', data: {}, buttons: null, list: null, complete: false, handover: false },
@@ -213,21 +212,24 @@ export async function getAIResponse(
   );
 
   try {
+    const startTime = Date.now();
     const response = await Promise.race([
       anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+        model: AI_MODEL,
         max_tokens: 400,
         system: systemPrompt,
         messages: recent
       }),
       timeout
     ]);
+    const durationMs = Date.now() - startTime;
+    const tokensUsed = (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0);
 
     const textBlock = response.content.find(b => b.type === 'text');
     const raw = textBlock?.type === 'text' ? textBlock.text : '';
     const parsed = parseAIResponse(raw);
 
-    return { parsed, rawResponse: raw };
+    return { parsed, rawResponse: raw, durationMs, tokensUsed };
   } catch (error: any) {
     if (error?.message === 'AI timeout') {
       console.error('❌ AI conversation timeout after 15s');

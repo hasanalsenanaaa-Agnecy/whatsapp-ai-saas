@@ -360,7 +360,8 @@ export async function handleAIConversation(
     customSystemPrompt: client.settings?.system_prompt
   };
 
-  const { parsed, rawResponse } = await getAIResponse(promptCtx, conv.messages, message);
+  const { parsed, rawResponse, durationMs, tokensUsed } = await getAIResponse(promptCtx, conv.messages, message);
+  emitEvent(client.id, 'ai_call', conv.phone, { source: 'ai_conversation', duration_ms: durationMs, tokens: tokensUsed });
   console.log(`🤖 AI raw: ${rawResponse.substring(0, 200)}`);
 
   if (Object.keys(parsed.data).length > 0) {
@@ -456,7 +457,7 @@ export async function handleAIFallback(
       client.settings?.system_prompt
     );
 
-    emitEvent(client.id, 'ai_call', conv.phone, { source: 'ai_conversation', confident: response.confident });
+    emitEvent(client.id, 'ai_call', conv.phone, { source: 'knowledge', confident: response.confident, duration_ms: response.durationMs, tokens: response.tokensUsed });
     await sendWhatsAppMessage(conv.phone, response.answer, accessToken, client.phone_number_id);
     conv.messages.push({ role: 'assistant', content: response.answer });
 
