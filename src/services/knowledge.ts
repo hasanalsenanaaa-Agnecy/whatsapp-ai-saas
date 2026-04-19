@@ -62,7 +62,8 @@ export async function generateKnowledgeResponse(
   knowledgeBase: KnowledgeItem[],
   customerContext: Record<string, any>,
   conversationHistory: ConversationMessage[],
-  userMessage: string
+  userMessage: string,
+  customSystemPrompt?: string
 ): Promise<AIResponse> {
   // If no API key, return graceful fallback
   if (!anthropic) {
@@ -120,8 +121,9 @@ export async function generateKnowledgeResponse(
       .map(([k, v]) => `${k}: ${v}`)
       .join('\n') || 'عميل جديد';
 
-    // Build system prompt
-    const systemPrompt = SYSTEM_PROMPT
+    // Build system prompt — use client override if provided, else default
+    const basePrompt = customSystemPrompt || SYSTEM_PROMPT;
+    const systemPrompt = basePrompt
       .replace('{businessName}', businessName)
       .replace('{knowledgeBase}', kbText)
       .replace('{shoppingContext}', shoppingContext)

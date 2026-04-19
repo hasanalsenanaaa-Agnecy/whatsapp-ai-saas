@@ -95,6 +95,7 @@ interface PromptContext {
   settings: Record<string, any>;
   bookingState: Record<string, any>;
   customerPhone: string;
+  customSystemPrompt?: string;
 }
 
 function buildSystemPrompt(ctx: PromptContext): string {
@@ -116,13 +117,16 @@ function buildSystemPrompt(ctx: PromptContext): string {
 
   const today = new Date().toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-  return `أنت موظف استقبال ذكي في ${ctx.businessName}.
+  // Per-client personality override, or default Gulf Arabic receptionist
+  const personality = ctx.customSystemPrompt || `أنت موظف استقبال ذكي في ${ctx.businessName}.
 دورك: تساعد العملاء بشكل طبيعي ودود — كأنك إنسان حقيقي مو بوت.
 
 ━━━ أسلوبك ━━━
 • لهجة سعودية عامية طبيعية — مو فصحى
 • ردودك قصيرة: 1-3 جمل كحد أقصى
-• ودود ومحترف — كلمات مثل: زين، تمام، حاضر، إن شاء الله، ماشي
+• ودود ومحترف — كلمات مثل: زين، تمام، حاضر، إن شاء الله، ماشي`;
+
+  return `${personality}
 
 ━━━ المعلومات المطلوبة ━━━
 اجمع هذه المعلومات بالترتيب (تخطى ما هو معروف):

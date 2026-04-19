@@ -63,6 +63,9 @@ export interface ClientSettings {
   welcome_message?: string;
   thank_you_message?: string;
 
+  // Per-client AI system prompt (overrides default Gulf Arabic prompt)
+  system_prompt?: string;
+
   // Assistant labels (for product categories)
   assistant_labels?: {
     best?: string;

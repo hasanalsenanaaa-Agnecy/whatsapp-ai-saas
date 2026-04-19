@@ -356,7 +356,8 @@ export async function handleAIConversation(
     knowledgeBase: client.knowledge_base || [],
     settings: client.settings || {},
     bookingState: { ...conv.data },
-    customerPhone: conv.phone
+    customerPhone: conv.phone,
+    customSystemPrompt: client.settings?.system_prompt
   };
 
   const { parsed, rawResponse } = await getAIResponse(promptCtx, conv.messages, message);
@@ -451,7 +452,8 @@ export async function handleAIFallback(
       client.knowledge_base || [],
       conv.data,
       conv.messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      message
+      message,
+      client.settings?.system_prompt
     );
 
     emitEvent(client.id, 'ai_call', conv.phone, { source: 'ai_conversation', confident: response.confident });

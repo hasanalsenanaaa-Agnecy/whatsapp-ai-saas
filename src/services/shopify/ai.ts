@@ -30,7 +30,8 @@ async function answerWithAI(
   products: ShopifyProduct[],
   storeName: string,
   currency: string | undefined,
-  history: { role: string; content: string }[]
+  history: { role: string; content: string }[],
+  customSystemPrompt?: string
 ): Promise<string | null> {
   if (!_anthropic) return null;
 
@@ -40,11 +41,13 @@ async function answerWithAI(
     return `- ${p.title} (${price})${desc ? ': ' + desc : ''}`;
   }).join('\n');
 
-  const system = `أنت مساعد متجر ${storeName} على واتساب.
+  const defaultPrompt = `أنت مساعد متجر ${storeName} على واتساب.
 أجب على سؤال العميل فقط من معلومات المنتجات المتاحة.
 لهجة خليجية قصيرة — جملة أو جملتين كحد أقصى.
 لا تقترح الشراء مباشرة ولا تذكر أسعار إلا إذا سأل عنها.
-إذا السؤال خارج نطاق المنتجات، قل "ما عندي تفاصيل عن هذا، بس تقدر تتصفح منتجاتنا."
+إذا السؤال خارج نطاق المنتجات، قل "ما عندي تفاصيل عن هذا، بس تقدر تتصفح منتجاتنا."`;
+
+  const system = `${customSystemPrompt || defaultPrompt}
 
 المنتجات:
 ${productList}`;
@@ -109,7 +112,7 @@ export async function tryAIAnswer(
   }
 
   const products: ShopifyProduct[] = conv.data._products || [];
-  const answer = await answerWithAI(message, products, config.storeName, config.currency, conv.messages);
+  const answer = await answerWithAI(message, products, config.storeName, config.currency, conv.messages, client.settings?.system_prompt);
   if (!answer) return false;
 
   emitEvent(client.id, 'ai_call', conv.phone, { source: 'shopify_agent', questionNum: count + 1 });
