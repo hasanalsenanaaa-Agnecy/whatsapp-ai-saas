@@ -346,7 +346,7 @@ wa.me/{whatsapp}`
 // inline messages and does not read these.
 // ============================================================
 export const SHOPIFY_MESSAGES: ClientMessages = {
-  welcome: `مرحباً بك في {businessName}! 🛍️
+  welcome: `مرحباً بك في {businessName}! 🌴
 
 وش اسمك الكريم؟`,
   askName: 'وش اسمك الكريم؟',

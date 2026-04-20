@@ -346,7 +346,7 @@ export async function showCart(
     conv.phone,
     cartMsg,
     [
-      { id: 'checkout_now', title: msg('اطلب الآن ✅', 'Order Now ✅', scl) },
+      { id: 'checkout_now', title: msg('اتمام الطلب ✅', 'Order Now ✅', scl) },
       { id: 'add_more', title: msg('أضف منتج', 'Add Product', scl) },
       { id: 'remove_item', title: msg('حذف منتج', 'Remove Item', scl) }
     ],

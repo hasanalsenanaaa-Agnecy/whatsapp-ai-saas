@@ -195,7 +195,7 @@ async function handleWelcome(
       const nameEn = nameParts[0];
       await sendWhatsAppButtons(
         conv.phone,
-        `أهلاً بك في *${nameAr}*! 🛍️\nWelcome to *${nameEn}*! 🛍️\n\n🌐 اختر لغتك / Choose your language`,
+        `أهلاً بك في *${nameAr}*! 🌴\nWelcome to *${nameEn}*! 🌴\n\n🌐 اختر لغتك / Choose your language`,
         [
           { id: 'lang_ar', title: 'العربية' },
           { id: 'lang_en', title: 'English' }
@@ -218,7 +218,7 @@ async function handleWelcome(
       const nameEn2 = nameParts2[0];
       await sendWhatsAppButtons(
         conv.phone,
-        `أهلاً بك في *${nameAr2}*! 🛍️\nWelcome to *${nameEn2}*! 🛍️\n\n🌐 اختر لغتك / Choose your language`,
+        `أهلاً بك في *${nameAr2}*! 🌴\nWelcome to *${nameEn2}*! 🌴\n\n🌐 اختر لغتك / Choose your language`,
         [
           { id: 'lang_ar', title: 'العربية' },
           { id: 'lang_en', title: 'English' }
@@ -243,7 +243,7 @@ async function handleWelcome(
           l
         ),
         [
-          { id: 'intent_order', title: msg('القائمة 🛍️', 'Menu 🛍️', l) },
+          { id: 'intent_order', title: msg('القائمة 🌴', 'Menu 🌴', l) },
           { id: 'intent_status', title: msg('حالة الطلب 📦', 'Order Status 📦', l) },
           { id: 'intent_cs', title: msg('خدمة العملاء 💬', 'Customer Service 💬', l) }
         ],
@@ -274,7 +274,7 @@ async function handleWelcome(
           l
         ),
         [
-          { id: 'intent_order', title: msg('القائمة 🛍️', 'Menu 🛍️', l) },
+          { id: 'intent_order', title: msg('القائمة 🌴', 'Menu 🌴', l) },
           { id: 'intent_status', title: msg('حالة الطلب 📦', 'Order Status 📦', l) },
           { id: 'intent_cs', title: msg('خدمة العملاء 💬', 'Customer Service 💬', l) }
         ],
@@ -761,7 +761,7 @@ async function handleQuantitySelect(
     [
       { id: 'add_more', title: msg('تسوق أكثر', 'Shop More', cartl) },
       { id: 'view_cart', title: msg('السلة', 'Cart', cartl) },
-      { id: 'checkout_now', title: msg('اطلب الآن', 'Order Now', cartl) }
+      { id: 'checkout_now', title: msg('اتمام الطلب', 'Order Now', cartl) }
     ],
     accessToken,
     client.phone_number_id
@@ -801,6 +801,7 @@ async function handleCart(
   // Checkout — explicit words + short "اطلب" alone
   if (lower === 'checkout_now' || lower === 'اطلب'
     || lower.includes('اطلب الآن') || lower.includes('اطلب الان')
+    || lower.includes('اتمام الطلب') || lower.includes('اتمام')
     || lower.includes('ادفع') || lower.includes('أطلب الآن') || lower.includes('أطلب الان')) {
     await processCheckout(client, conv, config, accessToken);
     return;

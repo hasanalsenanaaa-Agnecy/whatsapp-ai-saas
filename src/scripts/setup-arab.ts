@@ -15,7 +15,7 @@ async function main() {
       settings = ${JSON.stringify({
         shopify_domain: 'hsespd-dv.myshopify.com',
         currency: 'KWD',
-        welcome_message: 'أهلاً وسهلاً في ARAB | عرب! 🛍️',
+        welcome_message: 'أهلاً وسهلاً في ARAB | عرب! 🌴',
         thank_you_message: 'شكراً لتسوقك من ARAB | عرب! 🙏',
         assistant_labels: {
           best: 'هدية فاخرة',    // highest-priced = premium gift box

@@ -235,7 +235,7 @@ ${productsText}
       conv.phone,
       'شكراً لتسوقك! 🙏',
       [
-        { id: 'new_order', title: 'طلب جديد 🛍️' },
+        { id: 'new_order', title: 'طلب جديد 🌴' },
         { id: 'track_order', title: 'تتبع الطلب 📦' },
         { id: 'contact_us', title: 'تواصل معنا 💬' }
       ],
