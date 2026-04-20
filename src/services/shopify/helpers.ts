@@ -273,16 +273,21 @@ export function resetCurrentOrder(conv: ConversationState): void {
   delete conv.data._selectedVariantId;
   delete conv.data._selectedVariantTitle;
   delete conv.data._checkout;
+  delete conv.data._checkoutSentAt;
+  delete conv.data._paymentVerified;
+  delete conv.data._paymentHelpNotified;
+  delete conv.data._paymentNudgeSent;
+  delete conv.data._cartRecoverySent;
+  delete conv.data._checkoutInProgress;
+  // Legacy flags (pre-refactor) — clean up old sessions
   delete conv.data._paymentSelfReported;
   delete conv.data._paymentReportedAt;
-  delete conv.data._paymentVerified;
   delete conv.data._selfReportedAt;
   delete conv.data._paymentLinkReshown;
   delete conv.data._awaitingHelpMessage;
   delete conv.data._postReportReminderSent;
   delete conv.data._postReportOwnerNotified;
   delete conv.data._timeoutRecoveryOffered;
-  delete conv.data._checkoutInProgress;
   delete conv.data._aiAnswerCount;
   delete conv.data._aiExhaustedNotified;
   delete conv.data._gratitudeAcked;

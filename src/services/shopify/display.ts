@@ -63,12 +63,15 @@ export async function showVariantOrProductView(
     }
     conv.data._shopifyState = 'variant_select';
   } else {
-    // Single variant — set it and go straight to action buttons
+    // Single variant — set it and go straight to quantity
     const variant = availableVariants[0] || product.variants[0];
     conv.data._selectedVariant = variant;
     conv.data._selectedVariantId = variant?.id;
     conv.data._selectedVariantTitle = variant?.title;
-    await showProductView(client, conv, config, accessToken, product);
+    const label = variant?.title && variant.title !== 'Default Title'
+      ? `${product.title} — ${variant.title}`
+      : product.title;
+    await askQuantity(client, conv, config, accessToken, label);
   }
 }
 

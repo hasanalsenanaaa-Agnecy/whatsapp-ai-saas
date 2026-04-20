@@ -41,7 +41,7 @@ import {
   showTopProducts,
   showCart,
   showCartForRemoval,
-  askQuantity
+  askQuantity,
 } from './display.js';
 import { tryAIAnswer } from './ai.js';
 
@@ -243,7 +243,7 @@ async function handleWelcome(
           l
         ),
         [
-          { id: 'intent_order', title: msg('طلب جديد 🛍️', 'New Order 🛍️', l) },
+          { id: 'intent_order', title: msg('القائمة 🛍️', 'Menu 🛍️', l) },
           { id: 'intent_status', title: msg('حالة الطلب 📦', 'Order Status 📦', l) },
           { id: 'intent_cs', title: msg('خدمة العملاء 💬', 'Customer Service 💬', l) }
         ],
@@ -274,7 +274,7 @@ async function handleWelcome(
           l
         ),
         [
-          { id: 'intent_order', title: msg('طلب جديد 🛍️', 'New Order 🛍️', l) },
+          { id: 'intent_order', title: msg('القائمة 🛍️', 'Menu 🛍️', l) },
           { id: 'intent_status', title: msg('حالة الطلب 📦', 'Order Status 📦', l) },
           { id: 'intent_cs', title: msg('خدمة العملاء 💬', 'Customer Service 💬', l) }
         ],
@@ -447,7 +447,7 @@ async function handleBrowseChoice(
     conv.data._reprompted = null;
     conv.data._selectedProduct = questionMatch;
     conv.data._browseMode = 'list';
-    await showProductView(client, conv, config, accessToken, questionMatch);
+    await showVariantOrProductView(client, conv, config, accessToken, questionMatch);
     return;
   }
 
@@ -680,8 +680,11 @@ async function handleVariantSelect(
   conv.data._selectedVariant = variant;
   conv.data._selectedVariantId = variant.id;
   conv.data._selectedVariantTitle = variant.title;
-  // Show product view with action buttons now that variant is known
-  await showProductView(client, conv, config, accessToken, product);
+  // Variant chosen — go straight to quantity
+  const label = variant.title && variant.title !== 'Default Title'
+    ? `${product.title} — ${variant.title}`
+    : product.title;
+  await askQuantity(client, conv, config, accessToken, label);
 }
 
 // ============================================================
@@ -883,120 +886,57 @@ async function handlePaymentConfirmation(
   accessToken: string
 ): Promise<void> {
   const lower = message.toLowerCase().trim();
-  const checkoutUrl = conv.data._checkout?.url;
+  const l: string = conv.data._lang || 'ar';
 
-  // GLOBAL ESCAPE — cancel/waqf at any point resets the order
+  // Cancel intent → reset order
   const isCancelIntent = ['وقف', 'cancel', 'الغ', 'إلغاء', 'الغاء', 'مو عارف', 'بكره'].some(w => lower.includes(w));
   if (isCancelIntent) {
-    const pcl: string = conv.data._lang || 'ar';
     resetCurrentOrder(conv);
     conv.data._shopifyState = 'welcome';
-    await sendWhatsAppMessage(conv.phone, msg('تم إلغاء الطلب. تقدر تبدأ من جديد في أي وقت.', 'Order cancelled. You can start over anytime.', pcl), accessToken, client.phone_number_id);
+    await sendWhatsAppMessage(conv.phone, msg('تم إلغاء الطلب. تقدر تبدأ من جديد في أي وقت.', 'Order cancelled. You can start over anytime.', l), accessToken, client.phone_number_id);
     await handleWelcome(client, conv, config, message, accessToken);
     return;
   }
 
-  // After self-report: 2h timeout check + limited handling
-  if (conv.data._paymentSelfReported) {
-    const reportedAt = conv.data._paymentReportedAt ? new Date(conv.data._paymentReportedAt).getTime() : 0;
-    const hoursSinceReport = (Date.now() - reportedAt) / (1000 * 60 * 60);
-
-    // 2h passed with no webhook — offer recovery
-    if (hoursSinceReport >= 2 && !conv.data._timeoutRecoveryOffered) {
-      conv.data._timeoutRecoveryOffered = true;
-      const trl: string = conv.data._lang || 'ar';
-      await sendWhatsAppButtons(
-        conv.phone,
-        msg('يبدو إن التحقق تأخر. تبي تطلب من جديد؟', 'Verification seems delayed. Would you like to place a new order?', trl),
-        [
-          { id: 'new_order', title: msg('طلب جديد', 'New Order', trl) },
-          { id: 'contact_us_global', title: msg('تواصل مع فريقنا', 'Contact Us', trl) },
-          { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', trl) }
-        ],
-        accessToken,
-        client.phone_number_id
-      );
-      await notifyOwner(client, conv, config, 'urgent', accessToken);
-      return;
-    }
-
-    // Help button after self-report → same as any other message: notify once then silence
-    if (lower === 'paid_help' || lower.includes('مساعدة') || lower.includes('موظف')) {
-      conv.data._awaitingHelpMessage = true; // keep for reset cleanup only
-      return;
-    }
-
-    // New order button from timeout recovery
-    if (lower === 'new_order' || lower.includes('طلب جديد')) {
-      pushCurrentOrderToHistory(conv);
-      resetCurrentOrder(conv);
-      conv.data._shopifyState = 'welcome';
-      await handleWelcome(client, conv, config, message, accessToken);
-      return;
-    }
-
-    // Everything else after self-report:
-    // First extra message → notify owner once, then complete silence
-    if (!conv.data._postReportOwnerNotified) {
-      conv.data._postReportOwnerNotified = true;
-      await notifyOwner(client, conv, config, 'help', accessToken);
-    }
-    // Always silence — owner contacts customer directly
+  // New order → start fresh
+  if (lower === 'new_order' || lower.includes('طلب جديد')) {
+    pushCurrentOrderToHistory(conv);
+    resetCurrentOrder(conv);
+    conv.data._shopifyState = 'welcome';
+    await handleWelcome(client, conv, config, message, accessToken);
     return;
   }
 
-  // Help button → notify owner once + silence
-  if (lower === 'paid_help' || lower.includes('مساعدة') || lower.includes('موظف')) {
-    if (!conv.data._postReportOwnerNotified) {
-      conv.data._postReportOwnerNotified = true;
+  // Help button or help words → escalate to owner, acknowledge once
+  if (lower === 'paid_help' || lower.includes('مساعدة') || lower.includes('موظف') || lower.includes('help')) {
+    await sendWhatsAppMessage(conv.phone, msg('سيتواصل معك فريقنا قريباً.', 'Our team will contact you shortly.', l), accessToken, client.phone_number_id);
+    if (!conv.data._paymentHelpNotified) {
+      conv.data._paymentHelpNotified = true;
       await notifyOwner(client, conv, config, 'help', accessToken);
     }
     return;
   }
 
-  // Customer pressed "تم الدفع" → acknowledge, wait for webhook
-  const isPaid = lower === 'paid_yes' || lower.includes('تم') || lower.includes('دفعت')
-    || lower.includes('done') || lower.includes('paid');
-
-  if (isPaid) {
-    conv.data._paymentSelfReported = true;
-    conv.data._paymentReportedAt = new Date().toISOString();
-    await sendWhatsAppMessage(
-      conv.phone,
-      msg('شكراً! 🔄 جاري التحقق من دفعتك، بنرسل لك تأكيد خلال لحظات.', 'Thank you! 🔄 Verifying your payment, we\'ll send confirmation shortly.', conv.data._lang || 'ar'),
-      accessToken,
-      client.phone_number_id
-    );
-    await notifyOwner(client, conv, config, 'unverified', accessToken);
-    return;
-  }
-
-  // Unrecognized — re-show payment link once, second time notify owner + silence
-  if (conv.data._paymentLinkReshown) {
-    await sendWhatsAppMessage(conv.phone, msg('سيتواصل معك فريقنا قريباً.', 'Our team will contact you shortly.', conv.data._lang || 'ar'), accessToken, client.phone_number_id);
+  // Any other message → show help/home options, notify owner once
+  if (!conv.data._paymentHelpNotified) {
+    conv.data._paymentHelpNotified = true;
     await notifyOwner(client, conv, config, 'help', accessToken);
-    markReprompted(conv);
-    return;
   }
-  if (checkoutUrl) {
-    const pll: string = conv.data._lang || 'ar';
-    await sendWhatsAppButtons(
-      conv.phone,
-      msg(
-        `💳 رابط الدفع:\n${checkoutUrl}\n\nبعد إتمام الدفع، بنأكدلك تلقائياً ✅\nأو اضغط "تم الدفع" إذا أكملت الشراء`,
-        `💳 Payment link:\n${checkoutUrl}\n\nWe'll confirm automatically after payment ✅\nOr press "Payment Done" if you've completed the purchase`,
-        pll
-      ),
-      [
-        { id: 'paid_yes', title: msg('تم الدفع ✅', 'Payment Done ✅', pll) },
-        { id: 'paid_help', title: msg('أحتاج مساعدة', 'Need Help', pll) },
-        { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', pll) }
-      ],
-      accessToken,
-      client.phone_number_id
-    );
-    conv.data._paymentLinkReshown = true;
-  }
+
+  await sendWhatsAppButtons(
+    conv.phone,
+    msg(
+      'نحن بانتظار تأكيد الدفع 🔄\nإذا تحتاج مساعدة، فريقنا جاهز 👇',
+      'We\'re waiting for payment confirmation 🔄\nIf you need help, our team is ready 👇',
+      l
+    ),
+    [
+      { id: 'paid_help', title: msg('أحتاج مساعدة', 'Need Help', l) },
+      { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', l) }
+    ],
+    accessToken,
+    client.phone_number_id
+  );
 }
 
 // ============================================================
@@ -1290,25 +1230,17 @@ async function processCheckout(
 
   const price = formatPrice(cartTotalStr, checkout.currency);
 
-  // Single message: order summary + payment link + confirm button — no split bubbles
+  // Single message: order summary + payment link — no buttons, webhook confirms payment
   const nameGreet = conv.data.name ? (pcl === 'en' ? ` ${conv.data.name}` : ` يا ${conv.data.name}`) : '';
   const paymentMsg = msg(
-    `تمام${nameGreet}! هذي تفاصيل طلبك:\n\n${cartSummary}\n*المجموع: ${price}*\n\n💳 رابط الدفع:\n${checkout.checkoutUrl}\n\nبعد إتمام الدفع، بنأكدلك تلقائياً ✅\nأو اضغط "تم الدفع" إذا أكملت الشراء`,
-    `Great${nameGreet}! Here are your order details:\n\n${cartSummary}\n*Total: ${price}*\n\n💳 Payment link:\n${checkout.checkoutUrl}\n\nAfter payment, we'll confirm automatically ✅\nOr press "Payment Done" if you've completed the purchase`,
+    `تمام${nameGreet}! هذي تفاصيل طلبك:\n\n${cartSummary}\n*المجموع: ${price}*\n\n💳 رابط الدفع:\n${checkout.checkoutUrl}\n\nبعد إتمام الدفع، بنأكدلك تلقائياً ✅`,
+    `Great${nameGreet}! Here are your order details:\n\n${cartSummary}\n*Total: ${price}*\n\n💳 Payment link:\n${checkout.checkoutUrl}\n\nWe'll confirm your payment automatically ✅`,
     pcl
   );
-  await sendWhatsAppButtons(
-    conv.phone,
-    paymentMsg,
-    [
-      { id: 'paid_yes', title: msg('تم الدفع ✅', 'Payment Done ✅', pcl) },
-      { id: 'paid_help', title: msg('أحتاج مساعدة', 'Need Help', pcl) }
-    ],
-    accessToken,
-    client.phone_number_id
-  );
+  await sendWhatsAppMessage(conv.phone, paymentMsg, accessToken, client.phone_number_id);
   conv.messages.push({ role: 'assistant', content: paymentMsg });
 
+  conv.data._checkoutSentAt = new Date().toISOString();
   conv.data._shopifyState = 'awaiting_payment';
 }
 

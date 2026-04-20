@@ -32,4 +32,4 @@ Build or extend features in the WhatsApp automation platform. Minimum working im
 - AI (Claude API) is only for fallback conversations, Q&A, or intent detection. Never in the main flow.
 - Feature-gate expensive operations by pricing tier (Basic/Pro/Business).
 - No abstract factories. No config in the database. No speculative abstractions.
-- If it requires a new database table or Redis key pattern, document the schema change explicitly.
+- If it requires a new database table or migration, document the schema change explicitly.

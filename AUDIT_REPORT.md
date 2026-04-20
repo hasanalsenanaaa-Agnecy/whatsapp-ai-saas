@@ -1,7 +1,7 @@
 # Codebase & Business Audit Report
 
 **Original audit:** 2026-04-18
-**Updated:** 2026-04-19
+**Last updated:** 2026-04-19 (post Phase 2)
 **Auditor:** Claude (Staff Engineer / Product Strategist)
 **Scope:** Full codebase, architecture, security, business analytics, growth readiness
 
@@ -11,8 +11,9 @@
 
 You have a working production product that real customers use to buy real products. The bot flow for ARAB is genuinely good — bilingual, graceful degradation, smart reprompting, and payment verification via Shopify webhooks.
 
-Since the original audit, the 10-item priority backlog has been fully completed:
+Since the original audit, the 10-item priority backlog has been fully completed, plus a Phase 2 batch of 9 additional items:
 
+**Phase 1 (original backlog):**
 - **Security hardened:** Secrets rotated, .env removed from git history, customer PII masked in all logs.
 - **Codebase restructured:** The 2,430-line shopify-agent.ts monolith was split into 5 focused modules. All client objects are now typed via a `ClientConfig` contract — no more `any` everywhere.
 - **Test safety net built:** 93 unit tests covering 19 pure functions. Vitest runs instantly and never flakes.
@@ -20,7 +21,18 @@ Since the original audit, the 10-item priority backlog has been fully completed:
 - **Business features added:** Abandoned cart recovery cron sends checkout link reminders to customers who don't complete payment. Revenue reports show per-client per-month revenue.
 - **Documentation fixed:** architecture.md now matches reality (no phantom files, correct PostgreSQL state storage).
 
-**What this means for the business:** You can now safely add a second Shopify client (TypeScript enforces the config contract). You can show clients their ROI ("your bot generated X this month"). Abandoned carts get automatic follow-up. And you have a test suite that catches regressions before customers see them.
+**Phase 2 (post-audit hardening):**
+- **Token encryption:** Shopify tokens encrypted at rest with AES-256-GCM. Backward compatible with plaintext values.
+- **Per-tenant rate limiting:** 200 msg/min per client prevents one tenant from exhausting WhatsApp API limits.
+- **Centralized AI client:** Single Anthropic client manager with per-tenant concurrency control (max 5 concurrent).
+- **AI cost tracking:** Token counts and latency captured on every AI call — visible via `/api/analytics/ai-cost`.
+- **Product analytics:** Top products by checkout frequency — visible via `/api/analytics/products`.
+- **Per-client system prompts:** Each client can customize their AI personality via `settings.system_prompt`.
+- **Abandoned cart cron activated:** QStash POSTs every 30 minutes to trigger cart recovery.
+- **Analytics API live:** `ANALYTICS_KEY` set in production, all 5 endpoints active.
+- **Docs cleanup:** README and QUICK_START rewritten to match current codebase (removed stale Redis references).
+
+**What this means for the business:** You can now safely add a second Shopify client (TypeScript enforces the config contract). You can show clients their ROI ("your bot generated X this month"). Abandoned carts get automatic follow-up. Shopify tokens are encrypted at rest. Each client can have their own AI personality. AI costs are tracked per tenant. And you have a test suite that catches regressions before customers see them.
 
 ---
 
@@ -28,14 +40,14 @@ Since the original audit, the 10-item priority backlog has been fully completed:
 
 | Area | Before | Now | What changed |
 |------|--------|-----|-------------|
-| **Code quality** | 5/10 | **7/10** | shopify-agent.ts split into 5 modules (handlers, display, ai, helpers, types). `ClientConfig` type contract replaces `client: any` across 12 files. Still has some `any` in scripts and some hardcoded Gulf Arabic prompts. |
-| **Multi-tenant cleanliness** | 4/10 | **6/10** | `ClientConfig` interface types all tenant config. `parseClientRow` returns typed objects. Settings read via typed `ClientSettings`. Remaining gap: system prompts and dialect still hardcoded in knowledge.ts and ai.ts. |
-| **Security** | 2/10 | **5/10** | Secrets rotated, .env removed from git history, PII masked in logs. Remaining: Shopify tokens still plaintext in DB, no per-tenant Anthropic keys, no PDPL consent mechanism. |
-| **Observability** | 2/10 | **6/10** | Events table tracks message_in/out, checkout_created, payment_verified, ai_call, escalation, error. Revenue attribution + conversion funnel + usage summary queries available via API. Remaining: no real-time dashboard, no latency metrics, no alerting. |
-| **Test coverage** | 1/10 | **5/10** | 93 unit tests covering 19 pure functions (product matching, lead scoring, rate limiting, button helpers, intent detection, order status formatting). Remaining: no integration tests, no state machine tests, no end-to-end tests. |
-| **Documentation** | 6/10 | **7/10** | architecture.md rewritten — correct file list, PostgreSQL (not Redis), new modules documented. Remaining: no API docs, no runbook, no state machine diagram. |
-| **Business analytics** | 1/10 | **6/10** | Revenue per client per month, conversion funnel (messages → checkouts → payments), usage summary. API endpoints protected by ANALYTICS_KEY. CLI script for terminal reports. Remaining: no dashboard UI, no trend analysis, no cost tracking. |
-| **Growth readiness** | 3/10 | **5/10** | Adding a second Shopify client is now a DB insert — TypeScript enforces required fields. Remaining: no self-serve onboarding, no portal, setup-arab.ts still exists as client-specific script. |
+| **Code quality** | 5/10 | **7/10** | shopify-agent.ts split into 5 modules. `ClientConfig` type contract across 12 files. Centralized AI client manager. Still has some `any` in scripts. |
+| **Multi-tenant cleanliness** | 4/10 | **7/10** | Per-client system prompts. Per-tenant rate limiting (200 msg/min). Per-tenant AI concurrency control (max 5). Remaining gap: no per-client default language, message templates still per-industry. |
+| **Security** | 2/10 | **7/10** | Secrets rotated, .env removed from git, PII masked, Shopify tokens encrypted (AES-256-GCM), per-tenant rate limiting. Remaining: no PDPL consent mechanism, data residency question. |
+| **Observability** | 2/10 | **7/10** | Events table tracks all key actions. AI cost tracking (tokens + latency per call). 5 analytics API endpoints live. Remaining: no real-time dashboard UI, no alerting on error spikes. |
+| **Test coverage** | 1/10 | **5/10** | 93 unit tests covering 19 pure functions. Remaining: no integration tests, no state machine tests, no end-to-end tests. |
+| **Documentation** | 6/10 | **7/10** | architecture.md, README, QUICK_START all current. Remaining: no API docs, no runbook, no state machine diagram. |
+| **Business analytics** | 1/10 | **8/10** | Revenue, funnel, usage, AI cost, top products — all via API. QStash cron active. CLI reports. Remaining: no dashboard UI. |
+| **Growth readiness** | 3/10 | **5/10** | Adding a second Shopify client is a DB insert. Remaining: no self-serve onboarding, no portal. |
 
 ---
 
@@ -77,7 +89,8 @@ flowchart TD
         DB["Database\n(database.ts)\n✅ Returns ClientConfig"]
         WHATSAPP["WhatsApp API\n(whatsapp.ts)\n✅ Per-client token"]
         SHOPIFY_SVC["Shopify Service\n(shopify.ts)\n✅ Per-store cache"]
-        KNOWLEDGE["Knowledge AI\n(knowledge.ts)\n⚠️ Global Anthropic client"]
+        AI_CLIENT["AI Client Manager\n(ai-client.ts)\n✅ Per-tenant concurrency"]
+        KNOWLEDGE["Knowledge AI\n(knowledge.ts)\n✅ Per-client system prompt"]
         EVENTS["Event Logging\n(events.ts)\n✅ Fire-and-forget"]
         ANALYTICS_SVC["Analytics\n(analytics.ts)\n✅ Revenue + funnel"]
     end
@@ -115,7 +128,7 @@ flowchart TD
     Server --> DB
     Server --> EVENTS
 
-    KNOWLEDGE --> CLAUDE
+    KNOWLEDGE --> AI_CLIENT --> CLAUDE
     COMMON --> GSHEETS
     COMMON --> BOOKING
 
@@ -138,13 +151,13 @@ flowchart TD
 | Concern | Where it lives | Status | Notes |
 |---------|---------------|--------|-------|
 | **Store name, domain** | `clients.settings` (DB) | ✅ Good | Read at runtime via typed `ClientSettings` |
-| **Shopify tokens** | `clients.settings` (DB) | ⚠️ OK | Plaintext JSON, no encryption |
+| **Shopify tokens** | `clients.settings` (DB) | ✅ Encrypted | AES-256-GCM via `utils/crypto.ts` |
 | **WhatsApp credentials** | `clients.access_token` + `phone_number_id` (DB) | ✅ Good | Per-client, typed in `ClientConfig` |
 | **Currency** | `clients.settings.currency` with KWD fallback | ✅ Improved | Typed in `ClientSettings`, read via `getShopifyAgentConfig` |
 | **Language/dialect** | Session-level (`conv.data._lang`) | ⚠️ OK | Works but no per-client default language |
-| **Tone/personality** | Hardcoded Gulf Arabic in knowledge.ts and ai.ts | ❌ Not yet | Same prompt for all clients |
+| **Tone/personality** | `clients.settings.system_prompt` (DB) | ✅ Done | Per-client override, Gulf Arabic default fallback |
 | **Product catalog** | Fetched from Shopify per-domain | ✅ Good | Cached per store+language |
-| **System prompts** | Hardcoded in knowledge.ts and ai-conversation.ts | ❌ Not yet | Same prompt for all clients |
+| **System prompts** | `clients.settings.system_prompt` (DB) | ✅ Done | Overrides personality in knowledge.ts, ai-conversation.ts, and shopify/ai.ts |
 | **Industry flow** | `clients.industry` in DB, routed in conversation.ts | ✅ Good | Clean routing |
 | **Questions** | `clients.questions` in DB | ✅ Good | Per-client, typed as `ClientQuestion[]` |
 | **Message templates** | Hardcoded by industry in messages.ts | ⚠️ OK | Per-industry, not per-client |
@@ -227,10 +240,10 @@ The 2,430-line `shopify-agent.ts` monolith was split into 5 focused modules insi
 
 | Area | Status | Detail |
 |------|--------|--------|
-| Shopify tokens in DB | ⚠️ Plaintext | Admin/storefront tokens stored as plaintext JSON in `client.settings` |
-| AI (Claude) client | ⚠️ Shared | Single global Anthropic client — one tenant's spike affects all |
+| Shopify tokens in DB | ✅ Encrypted | AES-256-GCM encryption via `src/utils/crypto.ts`. Backward compatible with plaintext. |
+| AI (Claude) client | ✅ Per-tenant | Centralized client manager with per-tenant concurrency control (max 5) in `ai-client.ts`. |
 | Product cache | ⚠️ In-memory | Grows unbounded, lost on restart. Correctly isolated by domain. |
-| Rate limiting | ⚠️ Per-phone | Not per-tenant. High-volume client could exhaust WhatsApp API limits for others. |
+| Rate limiting | ✅ Per-tenant | Per-phone (10 msg/min) + per-tenant (200 msg/min) in `rateLimiter.ts`. |
 | PDPL compliance | ❌ Missing | No consent collection, no right-to-deletion, no data retention policy |
 | Data residency | ⚠️ Singapore | Neon DB in `ap-southeast-1`. PDPL may require KSA residency. |
 
@@ -274,9 +287,9 @@ The 2,430-line `shopify-agent.ts` monolith was split into 5 focused modules insi
 |-------|------|-------------|
 | `message_in` | message length | index.ts (webhook handler) |
 | `message_out` | message type | conversation layer |
-| `checkout_created` | item count, total, currency | handlers.ts (processCheckout) |
+| `checkout_created` | item count, total, currency, products[] | handlers.ts (processCheckout) |
 | `payment_verified` | order number, total, currency | shopify-webhook.ts |
-| `ai_call` | source, question count | ai.ts, common.ts |
+| `ai_call` | source, question count, tokens, duration_ms | ai.ts, common.ts |
 | `escalation` | reason | conversation.ts, handlers.ts |
 | `lead_captured` | score | common.ts |
 | `error` | error details | various |
@@ -285,14 +298,14 @@ The 2,430-line `shopify-agent.ts` monolith was split into 5 focused modules insi
 - `GET /api/analytics/revenue?client_id=X&months=3` — revenue per client per month
 - `GET /api/analytics/funnel?client_id=X` — messages → checkouts → payments with conversion rate
 - `GET /api/analytics/usage?client_id=X` — messages, AI calls, escalations, checkouts, payments
+- `GET /api/analytics/products?client_id=X` — top products by checkout frequency
+- `GET /api/analytics/ai-cost?client_id=X` — AI token usage and avg latency per tenant per month
 
 **CLI:** `npx tsx src/scripts/revenue.ts [clientId]` — terminal revenue report.
 
 **Still missing:**
 - Real-time dashboard UI
-- Response time / latency metrics
 - Alerting on error rate spikes
-- Cost tracking (AI API spend per tenant)
 
 ---
 
@@ -349,12 +362,17 @@ All tests are pure function tests — no mocking, no external dependencies. They
 | How many customers abandoned their cart? | Compare `checkout_created` vs `payment_verified` events |
 | How many conversations escalated to a human? | Count `escalation` events |
 
+**You can now also answer (Phase 2):**
+| Question | How |
+|----------|-----|
+| What's the AI response time per tenant? | `GET /api/analytics/ai-cost?client_id=X` (avg_duration_ms) |
+| How many tokens is each client consuming? | `GET /api/analytics/ai-cost?client_id=X` (total_tokens) |
+| Which products sell best via the bot? | `GET /api/analytics/products?client_id=X` |
+
 **You still can't answer:**
 | Question | What's needed |
 |----------|--------------|
-| What's the average response time? | Timestamp events with latency data |
 | What questions do customers ask most? | Store and cluster AI questions |
-| Which products sell best via the bot? | Parse cart items from checkout events |
 | What's the repeat customer rate? | Query by phone across time periods |
 | Dashboard showing all metrics visually | Build portal UI or integrate PostHog/Mixpanel |
 
@@ -366,8 +384,8 @@ These remain unchanged from the original audit. Listed here for reference with u
 
 | Opportunity | Effort | Prerequisite status |
 |-------------|--------|-------------------|
-| **Revenue Attribution Dashboard** | S | ✅ Backend ready (analytics.ts). Needs UI. |
-| **Abandoned Cart Recovery** | S | ✅ Built (cron/abandoned-cart.ts). Needs QStash activation. |
+| **Revenue Attribution Dashboard** | S | ✅ Backend ready (5 API endpoints live). Needs UI. |
+| **Abandoned Cart Recovery** | S | ✅ Complete — cron active via QStash every 30 min. |
 | **Salla & Zid Integration** | M | ✅ Unlocked by shopify/ module split. State machine is now platform-agnostic. |
 | **Productized Tiers with Feature Gates** | S | ⚠️ Feature flags exist but no tier→feature mapping enforced. |
 | **Voice Note Understanding** | M | No prerequisite changes needed. |
@@ -412,13 +430,13 @@ All 10 items from the original priority backlog are done:
 
 ## 14. What's Next
 
-The original backlog is complete. Here's what would have the most impact going forward, ordered by effort-to-value ratio:
+Phase 1 (original backlog) and Phase 2 (hardening) are complete. Here's what remains, ordered by effort-to-value ratio:
 
 ### Quick wins (S effort, high value)
 
-1. **Activate abandoned cart cron** — Set up QStash to POST `/cron/abandoned-cart` every 30 minutes. Pure revenue recovery with zero code changes.
-2. **Add ANALYTICS_KEY to production** — Enable the revenue/funnel/usage API endpoints on your live server.
-3. **Per-client system prompts** — Move the hardcoded Gulf Arabic prompt from knowledge.ts into `client.settings.system_prompt`. One DB update per client.
+1. ~~**Activate abandoned cart cron**~~ ✅ Done — QStash active, POSTs every 30 min.
+2. ~~**Add ANALYTICS_KEY to production**~~ ✅ Done — all 5 endpoints live.
+3. ~~**Per-client system prompts**~~ ✅ Done — `settings.system_prompt` overrides AI personality.
 
 ### Medium effort, high value
 

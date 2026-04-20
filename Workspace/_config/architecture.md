@@ -33,9 +33,12 @@ WhatsApp user sends message
 | `src/services/knowledge.ts` | AI knowledge base, lead scoring, handover detection. |
 | `src/services/ai-conversation.ts` | Claude API for free-form AI conversations. |
 | `src/services/events.ts` | Fire-and-forget event logging (analytics foundation). |
-| `src/services/analytics.ts` | Revenue attribution, conversion funnel, usage summary queries. |
+| `src/services/analytics.ts` | Revenue attribution, conversion funnel, usage summary, AI cost, top products. |
 | `src/services/appointments.ts` | Appointment booking, date generation, reminder scheduling. |
-| `src/services/rateLimiter.ts` | Per-phone rate limiting (10 msg/min). |
+| `src/services/ai-client.ts` | Centralized Anthropic client manager. Per-tenant concurrency control (max 5). |
+| `src/services/rateLimiter.ts` | Per-phone (10 msg/min) + per-tenant (200 msg/min) rate limiting. |
+| `src/utils/crypto.ts` | AES-256-GCM encryption/decryption for Shopify tokens in DB. |
+| `src/scripts/encrypt-tokens.ts` | One-time migration to encrypt existing plaintext tokens. |
 | `src/services/googleSheets.ts` | Google Sheets lead sync. |
 | `src/services/alerts.ts` | Owner notifications via WhatsApp. |
 | `src/scripts/` | CLI tools: add clients, set tiers, enable features, revenue reports. |
@@ -88,3 +91,13 @@ Feature gates are checked in `conversation.ts` and individual flow files using `
 ## Multi-tenancy enforcement
 
 Every database query includes `WHERE client_id = $X`. No exceptions. The `clientId` is resolved from the incoming webhook's `phoneNumberId` at the start of every request. Client configuration is typed via the `ClientConfig` interface in `src/types/client.ts`.
+
+## Security layers
+
+- **Webhook signatures:** WhatsApp (HMAC-SHA256) and Shopify (HMAC-SHA256) verified before processing.
+- **Token encryption:** Shopify tokens encrypted at rest with AES-256-GCM (`src/utils/crypto.ts`). Backward compatible — reads both `enc:` prefixed and plaintext values.
+- **Rate limiting:** Per-phone (10 msg/min) and per-tenant (200 msg/min) in `src/services/rateLimiter.ts`.
+- **AI concurrency:** Per-tenant limit (max 5 concurrent) in `src/services/ai-client.ts`.
+- **PII masking:** `maskPhone()` applied to all log output.
+- **Analytics API:** Protected by `ANALYTICS_KEY` env var.
+- **Cron endpoints:** Protected by `CRON_SECRET` bearer token.

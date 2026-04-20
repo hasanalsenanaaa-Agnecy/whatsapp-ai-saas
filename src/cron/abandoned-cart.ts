@@ -11,7 +11,9 @@ import { formatPrice } from '../services/shopify.js';
 import { maskPhone } from '../utils/buttons.js';
 import { emitEvent } from '../services/events.js';
 
-// Only nudge carts abandoned for at least this many minutes
+// Payment nudge — re-show cart if no webhook after 25 min (one-time)
+const PAYMENT_NUDGE_MINUTES = 25;
+// Abandoned cart recovery — longer window for customers who left entirely
 const MIN_ABANDONED_MINUTES = 60;
 // Don't nudge carts older than this many hours (stale)
 const MAX_ABANDONED_HOURS = 24;
@@ -41,7 +43,8 @@ export async function processAbandonedCarts(): Promise<{
     const maxAgo = new Date(Date.now() - MAX_ABANDONED_HOURS * 3600_000).toISOString();
 
     // Find conversations in awaiting_payment state, abandoned 1-24 hours ago,
-    // where we haven't already sent a recovery message
+    // where we haven't already sent a recovery message.
+    // Skip conversations that got the 25-min payment nudge (they already got the link again).
     const rows = await sql`
       SELECT client_id, phone, data, updated_at
       FROM conversations
@@ -49,6 +52,7 @@ export async function processAbandonedCarts(): Promise<{
         AND data->>'_shopifyState' = 'awaiting_payment'
         AND data->>'_paymentVerified' IS DISTINCT FROM 'true'
         AND data->>'_cartRecoverySent' IS DISTINCT FROM 'true'
+        AND data->>'_paymentNudgeSent' IS DISTINCT FROM 'true'
         AND updated_at <= ${minAgo}
         AND updated_at >= ${maxAgo}
       ORDER BY updated_at ASC
@@ -144,8 +148,102 @@ export async function processAbandonedCarts(): Promise<{
   }
 }
 
+// ============================================================
+// PAYMENT NUDGE
+// Re-shows cart + checkout link if no webhook after 25 min.
+// Sent once only — after this, silence until customer writes.
+// ============================================================
+
+async function processPaymentNudges(): Promise<{
+  found: number;
+  sent: number;
+  errors: string[];
+}> {
+  const result = { found: 0, sent: 0, errors: [] as string[] };
+  if (!sql) return result;
+
+  try {
+    const nudgeCutoff = new Date(Date.now() - PAYMENT_NUDGE_MINUTES * 60_000).toISOString();
+
+    const rows = await sql`
+      SELECT client_id, phone, data
+      FROM conversations
+      WHERE state = 'shopify_agent'
+        AND data->>'_shopifyState' = 'awaiting_payment'
+        AND data->>'_paymentVerified' IS DISTINCT FROM 'true'
+        AND data->>'_paymentNudgeSent' IS DISTINCT FROM 'true'
+        AND data->>'_checkoutSentAt' IS NOT NULL
+        AND (data->>'_checkoutSentAt')::timestamptz <= ${nudgeCutoff}::timestamptz
+      ORDER BY (data->>'_checkoutSentAt')::timestamptz ASC
+      LIMIT 50
+    `;
+
+    result.found = rows.length;
+    if (rows.length === 0) return result;
+
+    console.log(`💳 Found ${rows.length} payment nudges to send`);
+
+    for (const row of rows) {
+      try {
+        const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+        const checkoutUrl = data._checkout?.url;
+        if (!checkoutUrl) continue;
+
+        const client = await getClientById(row.client_id);
+        if (!client) continue;
+
+        const lang: string = data._lang || 'ar';
+        const currency = client.settings?.currency || 'KWD';
+        const cartItems: { productTitle: string; variantTitle?: string; price: string; quantity?: number }[] = data._cart || [];
+        if (cartItems.length === 0) continue;
+
+        // Build cart summary
+        let cartText = '';
+        let total = 0;
+        for (const item of cartItems) {
+          const qty = item.quantity || 1;
+          const lineTotal = parseFloat(item.price) * qty;
+          total += lineTotal;
+          let line = `• ${item.productTitle}`;
+          if (item.variantTitle && item.variantTitle !== 'Default Title') line += ` (${item.variantTitle})`;
+          if (qty > 1) line += ` x${qty}`;
+          line += ` — ${formatPrice(lineTotal.toFixed(2), currency)}`;
+          cartText += line + '\n';
+        }
+        const totalText = formatPrice(total.toFixed(2), currency);
+
+        const messageAr = `🔄 لا زلنا بانتظار تأكيد الدفع\n\n🛒 *سلتك:*\n${cartText}\n💰 *المجموع: ${totalText}*\n\n💳 رابط الدفع:\n${checkoutUrl}`;
+        const messageEn = `🔄 Still waiting for payment confirmation\n\n🛒 *Your cart:*\n${cartText}\n💰 *Total: ${totalText}*\n\n💳 Payment link:\n${checkoutUrl}`;
+
+        await sendWhatsAppMessage(row.phone, lang === 'en' ? messageEn : messageAr, client.access_token, client.phone_number_id);
+
+        // Mark as nudged — one time only
+        await sql`
+          UPDATE conversations
+          SET data = jsonb_set(data::jsonb, '{_paymentNudgeSent}', 'true')
+          WHERE client_id = ${row.client_id} AND phone = ${row.phone}
+        `;
+
+        emitEvent(client.id, 'message_out', row.phone, { type: 'payment_nudge' });
+        result.sent++;
+        console.log(`💳 Payment nudge sent to ${maskPhone(row.phone)}`);
+      } catch (error) {
+        result.errors.push(`Nudge error for ${maskPhone(row.phone)}: ${error}`);
+        console.error('💳 Payment nudge error:', error);
+      }
+    }
+
+    return result;
+  } catch (error) {
+    console.error('❌ Payment nudge error:', error);
+    result.errors.push(`Process error: ${error}`);
+    return result;
+  }
+}
+
 /**
  * HTTP handler for cron endpoint.
+ * Runs both payment nudges (25 min) and abandoned cart recovery (1-24h).
  * Add route: fastify.post('/cron/abandoned-cart', handleAbandonedCartCron)
  */
 export async function handleAbandonedCartCron(request: any, reply: any): Promise<void> {
@@ -159,10 +257,11 @@ export async function handleAbandonedCartCron(request: any, reply: any): Promise
   }
 
   try {
-    const result = await processAbandonedCarts();
-    reply.send({ success: true, ...result });
+    const nudges = await processPaymentNudges();
+    const carts = await processAbandonedCarts();
+    reply.send({ success: true, nudges, carts });
   } catch (error) {
-    console.error('❌ Abandoned cart cron error:', error);
+    console.error('❌ Cron error:', error);
     reply.status(500).send({ success: false, error: String(error) });
   }
 }

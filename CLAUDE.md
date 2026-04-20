@@ -26,15 +26,21 @@ portal/           Next.js client dashboard
 ## Key source files
 
 ```
-src/conversation.ts   — State machine router (all industry flows)
-src/messages.ts       — WhatsApp message templates (Gulf Arabic)
-src/index.ts          — Fastify server + webhook handlers
-src/services/         — Database, AI, WhatsApp API, appointments
-src/flows/            — Industry-specific conversation flows
-src/scripts/          — CLI tools (add clients, set tiers)
+src/conversation.ts        — State machine router (all industry flows)
+src/messages.ts            — WhatsApp message templates (Gulf Arabic)
+src/index.ts               — Fastify server + webhook handlers + analytics API
+src/services/ai-client.ts  — Centralized AI client (per-tenant concurrency)
+src/services/analytics.ts  — Revenue, funnel, usage, AI cost, top products
+src/services/shopify/      — Shopify agent (5 modules: handlers, display, ai, helpers, types)
+src/services/              — Database, WhatsApp API, appointments, events, alerts
+src/flows/                 — Industry-specific conversation flows
+src/utils/crypto.ts        — AES-256-GCM token encryption
+src/scripts/               — CLI tools (add clients, set tiers, encrypt tokens, revenue)
+src/__tests__/             — 93 unit tests (Vitest)
+src/cron/                  — Abandoned cart recovery, appointment reminders
 ```
 
 ## Tech stack
 
-Node.js + TypeScript · Fastify · Neon PostgreSQL · Upstash Redis
+Node.js + TypeScript · Fastify · Neon PostgreSQL · Upstash QStash (cron)
 Meta WhatsApp Business API · Claude API · Google Sheets · Shopify
