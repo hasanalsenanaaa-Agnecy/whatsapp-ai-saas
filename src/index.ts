@@ -1,11 +1,12 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
-import { initDatabase, getClientByPhoneNumberId } from './services/database.js';
+import { initDatabase, getClientByPhoneNumberId, deleteCustomerData } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
 import { handleReminderCron } from './cron/reminders.js';
 import { handleAbandonedCartCron } from './cron/abandoned-cart.js';
+import { handleDataRetentionCron } from './cron/data-retention.js';
 import { handleShopifyWebhook } from './services/shopify-webhook.js';
 import { checkRateLimit, checkTenantRateLimit } from './services/rateLimiter.js';
 import { maskPhone } from './utils/buttons.js';
@@ -177,6 +178,16 @@ fastify.get('/api/analytics/ai-cost', async (request, reply) => {
   return getAICostSummary(query.client_id, parseInt(query.months) || 3);
 });
 
+// PDPL — Right to deletion (DELETE /api/customer/:phone)
+fastify.delete('/api/customer/:phone', async (request, reply) => {
+  const query = request.query as any;
+  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
+  const { phone } = request.params as { phone: string };
+  if (!phone || phone.length < 8) return reply.code(400).send({ error: 'valid phone number required' });
+  const result = await deleteCustomerData(phone);
+  return { success: true, deleted: result };
+});
+
 // WhatsApp webhook verification
 fastify.get('/webhook/whatsapp', async (request, reply) => {
   const query = request.query as any;
@@ -254,6 +265,11 @@ fastify.post('/cron/reminders', async (request, reply) => {
 // Cron endpoint for abandoned cart recovery
 fastify.post('/cron/abandoned-cart', async (request, reply) => {
   await handleAbandonedCartCron(request, reply);
+});
+
+// Cron endpoint for PDPL data retention (run daily)
+fastify.post('/cron/data-retention', async (request, reply) => {
+  await handleDataRetentionCron(request, reply);
 });
 
 // Shopify orders/paid webhook

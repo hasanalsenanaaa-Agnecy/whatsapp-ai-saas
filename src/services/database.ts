@@ -116,9 +116,11 @@ export async function getConversation(clientId: string, phone: string) {
 
 export async function saveConversation(conv: any) {
   try {
+    const consentGiven = conv.data?._consentGiven || false;
+    const consentAt = conv.data?._consentAt || null;
     // Upsert — eliminates the check-then-insert race condition
     await sql`
-      INSERT INTO conversations (client_id, phone, messages, state, step, data, created_at, updated_at)
+      INSERT INTO conversations (client_id, phone, messages, state, step, data, created_at, updated_at, consent_given, consent_at)
       VALUES (
         ${conv.clientId},
         ${conv.phone},
@@ -127,14 +129,18 @@ export async function saveConversation(conv: any) {
         ${conv.step},
         ${JSON.stringify(conv.data)},
         ${conv.createdAt || new Date().toISOString()},
-        ${new Date().toISOString()}
+        ${new Date().toISOString()},
+        ${consentGiven},
+        ${consentAt}
       )
       ON CONFLICT (client_id, phone) DO UPDATE SET
-        messages   = EXCLUDED.messages,
-        state      = EXCLUDED.state,
-        step       = EXCLUDED.step,
-        data       = EXCLUDED.data,
-        updated_at = EXCLUDED.updated_at
+        messages     = EXCLUDED.messages,
+        state        = EXCLUDED.state,
+        step         = EXCLUDED.step,
+        data         = EXCLUDED.data,
+        updated_at   = EXCLUDED.updated_at,
+        consent_given = COALESCE(EXCLUDED.consent_given, conversations.consent_given),
+        consent_at    = COALESCE(EXCLUDED.consent_at, conversations.consent_at)
     `;
     return true;
   } catch (error) { console.error('❌ DB error:', error); return false; }
@@ -266,4 +272,41 @@ export async function updateAppointmentStatus(appointmentId: number, status: str
     console.error('❌ DB error updating appointment status:', error);
     return false;
   }
+}
+
+// ============================================================
+// PDPL — RIGHT TO DELETION
+// Deletes all personal data for a given phone number.
+// ============================================================
+
+export async function deleteCustomerData(phone: string): Promise<{
+  conversations: number;
+  leads: number;
+  events: number;
+  appointments: number;
+}> {
+  const result = { conversations: 0, leads: 0, events: 0, appointments: 0 };
+
+  try {
+    const convRows = await sql`DELETE FROM conversations WHERE phone = ${phone} RETURNING client_id`;
+    result.conversations = convRows.length;
+  } catch (error) { console.error('❌ Deletion error (conversations):', error); }
+
+  try {
+    const leadRows = await sql`DELETE FROM leads WHERE phone = ${phone} RETURNING id`;
+    result.leads = leadRows.length;
+  } catch (error) { console.error('❌ Deletion error (leads):', error); }
+
+  try {
+    const eventRows = await sql`DELETE FROM events WHERE phone = ${phone} RETURNING id`;
+    result.events = eventRows.length;
+  } catch (error) { console.error('❌ Deletion error (events):', error); }
+
+  try {
+    const apptRows = await sql`DELETE FROM appointments WHERE phone = ${phone} RETURNING id`;
+    result.appointments = apptRows.length;
+  } catch (error) { console.error('❌ Deletion error (appointments):', error); }
+
+  console.log(`🗑️ PDPL deletion for ${phone}: ${JSON.stringify(result)}`);
+  return result;
 }

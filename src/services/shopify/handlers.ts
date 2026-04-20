@@ -69,6 +69,15 @@ export async function handleShopifyAgent(
   const trimmed = message.trim();
   const lower = trimmed.toLowerCase();
 
+  // If consent was declined, re-ask on next message
+  if (conv.data._consentDeclined) {
+    delete conv.data._consentDeclined;
+    delete conv.data._consentAsked;
+    conv.data._shopifyState = 'welcome';
+    await handleWelcome(client, conv, config, message, accessToken);
+    return;
+  }
+
   // GLOBAL CANCEL — "خلاص", "وقف", "cancel", "restart"
   const cancelWords = ['وقف', 'cancel', 'restart'];
   if (cancelWords.some(w => lower === w)) {
@@ -232,7 +241,63 @@ async function handleWelcome(
 
   const l: string = conv.data._lang || 'ar';
 
-  // STEP 2: Intent menu
+  // STEP 2: PDPL consent (one-time)
+  if (!conv.data._consentGiven) {
+    if (!conv.data._consentAsked) {
+      await sendWhatsAppButtons(
+        conv.phone,
+        msg(
+          'نحن نحفظ بيانات المحادثة لمعالجة طلبك وتحسين الخدمة. بالاستمرار، أنت توافق على سياسة الخصوصية.\n\n🔒 بياناتك محمية ويمكنك طلب حذفها في أي وقت.',
+          'We store conversation data to process your order and improve our service. By continuing, you agree to our privacy policy.\n\n🔒 Your data is protected and you can request deletion at any time.',
+          l
+        ),
+        [
+          { id: 'consent_yes', title: msg('موافق ✅', 'I Agree ✅', l) },
+          { id: 'consent_no', title: msg('لا أوافق ❌', 'Decline ❌', l) }
+        ],
+        accessToken,
+        client.phone_number_id
+      );
+      conv.data._consentAsked = true;
+      return;
+    }
+    if (lower === 'consent_yes' || lower.includes('موافق') || lower.includes('agree') || lower.includes('نعم') || lower === 'yes' || lower === 'ok') {
+      conv.data._consentGiven = true;
+      conv.data._consentAt = new Date().toISOString();
+    } else if (lower === 'consent_no' || lower.includes('لا أوافق') || lower.includes('decline') || lower.includes('رفض') || lower === 'no') {
+      await sendWhatsAppMessage(
+        conv.phone,
+        msg(
+          'نحترم خصوصيتك. لا يمكننا متابعة الخدمة بدون موافقتك على حفظ البيانات.\n\nإذا غيّرت رأيك، أرسل أي رسالة للبدء من جديد.',
+          'We respect your privacy. We cannot continue without your consent to store data.\n\nIf you change your mind, send any message to start over.',
+          l
+        ),
+        accessToken,
+        client.phone_number_id
+      );
+      conv.data._consentDeclined = true;
+      return;
+    } else {
+      // Didn't understand — re-ask
+      await sendWhatsAppButtons(
+        conv.phone,
+        msg(
+          'الرجاء اختيار أحد الخيارات:',
+          'Please choose one of the options:',
+          l
+        ),
+        [
+          { id: 'consent_yes', title: msg('موافق ✅', 'I Agree ✅', l) },
+          { id: 'consent_no', title: msg('لا أوافق ❌', 'Decline ❌', l) }
+        ],
+        accessToken,
+        client.phone_number_id
+      );
+      return;
+    }
+  }
+
+  // STEP 3: Intent menu
   if (!conv.data._intent) {
     if (!conv.data._intentAsked) {
       await sendWhatsAppButtons(
