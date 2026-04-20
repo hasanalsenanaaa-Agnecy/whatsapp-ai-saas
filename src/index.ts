@@ -11,7 +11,7 @@ import { handleShopifyWebhook } from './services/shopify-webhook.js';
 import { checkRateLimit, checkTenantRateLimit } from './services/rateLimiter.js';
 import { maskPhone } from './utils/buttons.js';
 import crypto from 'crypto';
-import { sendAlert, alertError } from './services/alerts.js';
+import { sendAlert, alertError, trackError, getHealthStatus, sendDailySummary } from './services/alerts.js';
 import { emitEvent } from './services/events.js';
 import { getRevenueByClient, getConversionFunnel, getUsageSummary, getTopProducts, getAICostSummary } from './services/analytics.js';
 
@@ -143,7 +143,11 @@ function verifyWebhookSignature(rawBody: string, signature: string, secret: stri
 // ============================================================
 
 fastify.get('/', async () => ({ service: 'WhatsApp AI Receptionist', status: 'running', version: '3.0.0' }));
-fastify.get('/health', async () => ({ status: 'healthy', uptime: process.uptime() }));
+fastify.get('/health', async (_request, reply) => {
+  const health = await getHealthStatus();
+  const code = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
+  return reply.code(code).send(health);
+});
 
 // Analytics API — protected by ANALYTICS_KEY env var
 fastify.get('/api/analytics/revenue', async (request, reply) => {
@@ -272,6 +276,20 @@ fastify.post('/cron/data-retention', async (request, reply) => {
   await handleDataRetentionCron(request, reply);
 });
 
+// Cron endpoint for daily summary (run once daily at 10pm Riyadh)
+fastify.post('/cron/daily-summary', async (request, reply) => {
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    const authHeader = request.headers['authorization'] as string | undefined;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (token !== cronSecret) {
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
+  }
+  const sent = await sendDailySummary();
+  return { success: sent };
+});
+
 // Shopify orders/paid webhook
 fastify.post('/webhook/shopify', async (request, reply) => {
   const rawBody = (request as any).rawBody as string;
@@ -287,6 +305,8 @@ fastify.post('/webhook/shopify', async (request, reply) => {
       await handleShopifyWebhook(request.body, rawBody, hmacHeader, shopDomain, topic);
     } catch (error) {
       console.error('Shopify webhook error:', error);
+      trackError();
+      await alertError(error as Error, 'Shopify webhook processing failed');
     }
   });
 });

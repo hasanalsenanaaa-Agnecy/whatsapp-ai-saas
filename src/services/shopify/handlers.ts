@@ -44,6 +44,7 @@ import {
   askQuantity,
 } from './display.js';
 import { tryAIAnswer } from './ai.js';
+import { trackClientError } from '../alerts.js';
 
 // ============================================================
 // MAIN HANDLER
@@ -427,6 +428,7 @@ async function handleWelcome(
       accessToken,
       client.phone_number_id
     );
+    await trackClientError(client, 'Shopify Products', new Error('Product catalog returned empty'));
     return;
   }
 
@@ -1250,6 +1252,7 @@ async function processCheckout(
     await sendWhatsAppMessage(conv.phone, msg('عذراً، صار خطأ في إنشاء الطلب. جرب مرة ثانية.', 'Sorry, there was an error creating your order. Please try again.', conv.data._lang || 'ar'), accessToken, client.phone_number_id);
     // Notify owner — customer was ready to pay but checkout failed
     await notifyOwner(client, conv, config, 'urgent', accessToken);
+    await trackClientError(client, 'Shopify Checkout', new Error('Checkout creation failed'));
     return;
   }
 
