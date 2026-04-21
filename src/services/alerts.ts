@@ -201,7 +201,196 @@ export async function trackClientError(
 }
 
 // ============================================================
-// DAILY SUMMARY
+// PER-CLIENT DAILY SUMMARY
+// Sends a summary of yesterday's activity to the client's
+// agent_phones[0] using their own WhatsApp credentials.
+// ============================================================
+
+export async function sendClientDailySummary(client: ClientConfig): Promise<boolean> {
+  const agentPhone = client.agent_phones?.[0];
+  if (!agentPhone || !client.access_token || !client.phone_number_id) {
+    return false;
+  }
+  if (!sql) return false;
+
+  try {
+    // Yesterday 00:00 → today 00:00 in Riyadh time
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const yesterdayStart = new Date(todayStart);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+
+    const [messages, checkouts, payments, aiCalls, uniqueCustomers] = await Promise.all([
+      sql`SELECT COUNT(*) AS count FROM events WHERE client_id = ${client.id} AND event_type = 'message_in' AND created_at >= ${yesterdayStart.toISOString()} AND created_at < ${todayStart.toISOString()}`,
+      sql`SELECT COUNT(*) AS count FROM events WHERE client_id = ${client.id} AND event_type = 'checkout_created' AND created_at >= ${yesterdayStart.toISOString()} AND created_at < ${todayStart.toISOString()}`,
+      sql`SELECT COUNT(*) AS count, COALESCE(SUM((data->>'total')::numeric), 0) AS revenue FROM events WHERE client_id = ${client.id} AND event_type = 'payment_verified' AND created_at >= ${yesterdayStart.toISOString()} AND created_at < ${todayStart.toISOString()}`,
+      sql`SELECT COUNT(*) AS count FROM events WHERE client_id = ${client.id} AND event_type = 'ai_call' AND created_at >= ${yesterdayStart.toISOString()} AND created_at < ${todayStart.toISOString()}`,
+      sql`SELECT COUNT(DISTINCT phone) AS count FROM events WHERE client_id = ${client.id} AND event_type = 'message_in' AND created_at >= ${yesterdayStart.toISOString()} AND created_at < ${todayStart.toISOString()}`,
+    ]);
+
+    const msgCount = parseInt(messages[0]?.count || '0');
+    const checkoutCount = parseInt(checkouts[0]?.count || '0');
+    const paymentCount = parseInt(payments[0]?.count || '0');
+    const revenue = parseFloat(payments[0]?.revenue || '0').toFixed(2);
+    const aiCount = parseInt(aiCalls[0]?.count || '0');
+    const uniqueCount = parseInt(uniqueCustomers[0]?.count || '0');
+
+    const dateLabel = yesterdayStart.toLocaleDateString('ar-SA', {
+      timeZone: 'Asia/Riyadh',
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    const body = [
+      `📊 *تقرير ${client.name} اليومي*`,
+      `${dateLabel}`,
+      ``,
+      `👥 عملاء جدد: ${uniqueCount}`,
+      `💬 رسائل مستلمة: ${msgCount}`,
+      `🛒 طلبات بدأت: ${checkoutCount}`,
+      `✅ طلبات مدفوعة: ${paymentCount}`,
+      `💰 المبيعات: ${revenue}`,
+      `🤖 ردود AI: ${aiCount}`,
+    ].join('\n');
+
+    return await sendWhatsApp(client.phone_number_id, client.access_token, agentPhone, body);
+  } catch (error) {
+    console.error(`❌ Client daily summary error for ${client.id}:`, error);
+    return false;
+  }
+}
+
+export async function sendAllClientDailySummaries(): Promise<{ sent: number; failed: number }> {
+  if (!sql) return { sent: 0, failed: 0 };
+
+  try {
+    const rows = await sql`SELECT * FROM clients WHERE active = true`;
+    let sent = 0;
+    let failed = 0;
+
+    for (const row of rows) {
+      // Minimal parse — we only need the fields sendClientDailySummary uses.
+      const client = {
+        id: row.id,
+        name: row.name || '',
+        phone_number_id: row.phone_number_id,
+        access_token: row.access_token || '',
+        agent_phones: row.agent_phones || [],
+      } as ClientConfig;
+
+      const ok = await sendClientDailySummary(client);
+      if (ok) sent++;
+      else failed++;
+    }
+
+    return { sent, failed };
+  } catch (error) {
+    console.error('❌ sendAllClientDailySummaries error:', error);
+    return { sent: 0, failed: 0 };
+  }
+}
+
+// ============================================================
+// PER-CLIENT MONTHLY SUMMARY
+// Sends a full performance report of the previous calendar
+// month to the client. Run from /cron/monthly-summary on the
+// 1st of each month.
+// ============================================================
+
+export async function sendClientMonthlySummary(client: ClientConfig): Promise<boolean> {
+  const agentPhone = client.agent_phones?.[0];
+  if (!agentPhone || !client.access_token || !client.phone_number_id) {
+    return false;
+  }
+  if (!sql) return false;
+
+  try {
+    // Previous calendar month: [firstOfLastMonth, firstOfThisMonth)
+    const now = new Date();
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+    const [messages, customers, checkouts, payments, aiCalls] = await Promise.all([
+      sql`SELECT COUNT(*) AS count FROM events WHERE client_id = ${client.id} AND event_type = 'message_in' AND created_at >= ${lastMonthStart.toISOString()} AND created_at < ${thisMonthStart.toISOString()}`,
+      sql`SELECT COUNT(DISTINCT phone) AS count FROM events WHERE client_id = ${client.id} AND event_type = 'message_in' AND created_at >= ${lastMonthStart.toISOString()} AND created_at < ${thisMonthStart.toISOString()}`,
+      sql`SELECT COUNT(*) AS count FROM events WHERE client_id = ${client.id} AND event_type = 'checkout_created' AND created_at >= ${lastMonthStart.toISOString()} AND created_at < ${thisMonthStart.toISOString()}`,
+      sql`SELECT COUNT(*) AS count, COALESCE(SUM((data->>'total')::numeric), 0) AS revenue FROM events WHERE client_id = ${client.id} AND event_type = 'payment_verified' AND created_at >= ${lastMonthStart.toISOString()} AND created_at < ${thisMonthStart.toISOString()}`,
+      sql`SELECT COUNT(*) AS count FROM events WHERE client_id = ${client.id} AND event_type = 'ai_call' AND created_at >= ${lastMonthStart.toISOString()} AND created_at < ${thisMonthStart.toISOString()}`,
+    ]);
+
+    const msgCount = parseInt(messages[0]?.count || '0');
+    const customerCount = parseInt(customers[0]?.count || '0');
+    const checkoutCount = parseInt(checkouts[0]?.count || '0');
+    const paymentCount = parseInt(payments[0]?.count || '0');
+    const revenue = parseFloat(payments[0]?.revenue || '0');
+    const aiCount = parseInt(aiCalls[0]?.count || '0');
+
+    const conversionRate = customerCount > 0 ? ((paymentCount / customerCount) * 100).toFixed(1) : '0.0';
+    const avgOrderValue = paymentCount > 0 ? (revenue / paymentCount).toFixed(2) : '0.00';
+
+    const monthLabel = lastMonthStart.toLocaleDateString('ar-SA', {
+      timeZone: 'Asia/Riyadh',
+      year: 'numeric',
+      month: 'long',
+    });
+
+    const body = [
+      `📈 *التقرير الشهري — ${client.name}*`,
+      `${monthLabel}`,
+      ``,
+      `👥 عملاء فريدون: ${customerCount}`,
+      `💬 رسائل مستلمة: ${msgCount}`,
+      `🛒 طلبات بدأت: ${checkoutCount}`,
+      `✅ طلبات مدفوعة: ${paymentCount}`,
+      `💰 إجمالي المبيعات: ${revenue.toFixed(2)}`,
+      `📊 متوسط قيمة الطلب: ${avgOrderValue}`,
+      `🎯 معدل التحويل: ${conversionRate}%`,
+      `🤖 ردود AI: ${aiCount}`,
+      ``,
+      `للتفاصيل الكاملة، راجع الداش بورد الخاص بك 📱`,
+    ].join('\n');
+
+    return await sendWhatsApp(client.phone_number_id, client.access_token, agentPhone, body);
+  } catch (error) {
+    console.error(`❌ Client monthly summary error for ${client.id}:`, error);
+    return false;
+  }
+}
+
+export async function sendAllClientMonthlySummaries(): Promise<{ sent: number; failed: number }> {
+  if (!sql) return { sent: 0, failed: 0 };
+
+  try {
+    const rows = await sql`SELECT * FROM clients WHERE active = true`;
+    let sent = 0;
+    let failed = 0;
+
+    for (const row of rows) {
+      const client = {
+        id: row.id,
+        name: row.name || '',
+        phone_number_id: row.phone_number_id,
+        access_token: row.access_token || '',
+        agent_phones: row.agent_phones || [],
+      } as ClientConfig;
+
+      const ok = await sendClientMonthlySummary(client);
+      if (ok) sent++;
+      else failed++;
+    }
+
+    return { sent, failed };
+  } catch (error) {
+    console.error('❌ sendAllClientMonthlySummaries error:', error);
+    return { sent: 0, failed: 0 };
+  }
+}
+
+// ============================================================
+// PLATFORM-WIDE DAILY SUMMARY (sent to owner)
 // ============================================================
 
 export async function sendDailySummary(): Promise<boolean> {

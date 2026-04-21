@@ -310,3 +310,223 @@ export async function deleteCustomerData(phone: string): Promise<{
   console.log(`🗑️ PDPL deletion for ${phone}: ${JSON.stringify(result)}`);
   return result;
 }
+
+// ============================================================
+// DASHBOARD — Auth, conversations, clients, alerts
+// ============================================================
+
+/**
+ * Validate a dashboard key. Returns role + client info.
+ * Owner: key matches ANALYTICS_KEY env var.
+ * Client: key matches a client's dashboard_key column.
+ */
+export async function validateDashboardKey(key: string): Promise<{
+  role: 'owner' | 'client';
+  clientId?: string;
+  clientName?: string;
+} | null> {
+  if (!key) return null;
+
+  // Check owner key first
+  if (key === process.env.ANALYTICS_KEY) {
+    return { role: 'owner' };
+  }
+
+  // Check client dashboard keys
+  try {
+    const rows = await sql`
+      SELECT id, name FROM clients
+      WHERE dashboard_key = ${key} AND active = true
+      LIMIT 1
+    `;
+    if (rows[0]) {
+      return { role: 'client', clientId: rows[0].id, clientName: rows[0].name };
+    }
+  } catch (error) {
+    console.error('❌ Dashboard auth error:', error);
+  }
+
+  return null;
+}
+
+/**
+ * List conversations with pagination, filtering, and phone masking.
+ */
+export async function listConversations(opts: {
+  clientId?: string;
+  state?: string;
+  page?: number;
+  limit?: number;
+}): Promise<{ conversations: any[]; total: number }> {
+  const page = opts.page || 1;
+  const limit = Math.min(opts.limit || 20, 50);
+  const offset = (page - 1) * limit;
+
+  try {
+    // Build conditions
+    const conditions: any[] = [];
+    if (opts.clientId) conditions.push(sql`c.client_id = ${opts.clientId}`);
+    if (opts.state) conditions.push(sql`c.state = ${opts.state}`);
+
+    const where = conditions.length > 0
+      ? sql`WHERE ${conditions.reduce((a, b) => sql`${a} AND ${b}`)}`
+      : sql``;
+
+    const [rows, countRows] = await Promise.all([
+      sql`
+        SELECT
+          c.client_id,
+          cl.name AS client_name,
+          c.phone,
+          c.state,
+          c.step,
+          c.updated_at,
+          c.created_at,
+          jsonb_array_length(COALESCE(c.messages, '[]'::jsonb)) AS message_count,
+          c.messages->-1->>'content' AS last_message
+        FROM conversations c
+        JOIN clients cl ON cl.id = c.client_id
+        ${where}
+        ORDER BY c.updated_at DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `,
+      sql`
+        SELECT COUNT(*) AS total
+        FROM conversations c
+        ${where}
+      `,
+    ]);
+
+    return {
+      conversations: rows.map(r => ({
+        client_id: r.client_id,
+        client_name: r.client_name,
+        phone: r.phone,
+        state: r.state,
+        step: r.step,
+        updated_at: r.updated_at,
+        created_at: r.created_at,
+        message_count: parseInt(r.message_count) || 0,
+        last_message: r.last_message || null,
+      })),
+      total: parseInt(countRows[0]?.total) || 0,
+    };
+  } catch (error) {
+    console.error('❌ listConversations error:', error);
+    return { conversations: [], total: 0 };
+  }
+}
+
+/**
+ * Get full conversation detail (messages) for a specific phone + client.
+ */
+export async function getConversationDetail(clientId: string, phone: string): Promise<any | null> {
+  try {
+    const rows = await sql`
+      SELECT
+        c.*,
+        cl.name AS client_name
+      FROM conversations c
+      JOIN clients cl ON cl.id = c.client_id
+      WHERE c.client_id = ${clientId} AND c.phone = ${phone}
+      LIMIT 1
+    `;
+    if (!rows[0]) return null;
+    const r = rows[0];
+    return {
+      client_id: r.client_id,
+      client_name: r.client_name,
+      phone: r.phone,
+      state: r.state,
+      step: r.step,
+      messages: parseJSON(r.messages, []),
+      data: parseJSON(r.data, {}),
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    };
+  } catch (error) {
+    console.error('❌ getConversationDetail error:', error);
+    return null;
+  }
+}
+
+/**
+ * List all active clients with summary stats (owner only).
+ */
+export async function listClients(): Promise<any[]> {
+  try {
+    const thisMonth = new Date();
+    thisMonth.setDate(1);
+    thisMonth.setHours(0, 0, 0, 0);
+    const monthStart = thisMonth.toISOString();
+
+    const rows = await sql`
+      SELECT
+        c.id,
+        c.name,
+        c.industry,
+        c.active,
+        c.phone_number_id,
+        (SELECT COUNT(*) FROM events e WHERE e.client_id = c.id AND e.event_type = 'message_in' AND e.created_at >= ${monthStart}) AS monthly_messages,
+        (SELECT COALESCE(SUM((e.data->>'total')::numeric), 0) FROM events e WHERE e.client_id = c.id AND e.event_type = 'payment_verified' AND e.created_at >= ${monthStart}) AS monthly_revenue
+      FROM clients c
+      WHERE c.active = true
+      ORDER BY c.name
+    `;
+
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      industry: r.industry,
+      active: r.active,
+      phone_number_id: r.phone_number_id,
+      monthly_messages: parseInt(r.monthly_messages) || 0,
+      monthly_revenue: parseFloat(r.monthly_revenue) || 0,
+    }));
+  } catch (error) {
+    console.error('❌ listClients error:', error);
+    return [];
+  }
+}
+
+/**
+ * Get recent error events for alert history.
+ */
+export async function listAlerts(opts: {
+  clientId?: string;
+  limit?: number;
+}): Promise<any[]> {
+  const limit = Math.min(opts.limit || 50, 100);
+
+  try {
+    const rows = opts.clientId
+      ? await sql`
+          SELECT e.id, e.client_id, c.name AS client_name, e.event_type, e.phone, e.data, e.created_at
+          FROM events e
+          JOIN clients c ON c.id = e.client_id
+          WHERE e.event_type = 'error' AND e.client_id = ${opts.clientId}
+          ORDER BY e.created_at DESC
+          LIMIT ${limit}
+        `
+      : await sql`
+          SELECT e.id, e.client_id, c.name AS client_name, e.event_type, e.phone, e.data, e.created_at
+          FROM events e
+          JOIN clients c ON c.id = e.client_id
+          WHERE e.event_type = 'error'
+          ORDER BY e.created_at DESC
+          LIMIT ${limit}
+        `;
+
+    return rows.map(r => ({
+      id: r.id,
+      client_id: r.client_id,
+      client_name: r.client_name,
+      event_type: r.event_type,
+      data: parseJSON(r.data, {}),
+      created_at: r.created_at,
+    }));
+  } catch (error) {
+    console.error('❌ listAlerts error:', error);
+    return [];
+  }
+}

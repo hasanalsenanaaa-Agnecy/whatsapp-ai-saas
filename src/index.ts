@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
-import { initDatabase, getClientByPhoneNumberId, deleteCustomerData } from './services/database.js';
+import cors from '@fastify/cors';
+import { initDatabase, getClientByPhoneNumberId, getClientById, deleteCustomerData, validateDashboardKey, listConversations, getConversationDetail, listClients, listAlerts } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
 import { handleReminderCron } from './cron/reminders.js';
@@ -11,9 +12,11 @@ import { handleShopifyWebhook } from './services/shopify-webhook.js';
 import { checkRateLimit, checkTenantRateLimit } from './services/rateLimiter.js';
 import { maskPhone } from './utils/buttons.js';
 import crypto from 'crypto';
-import { sendAlert, alertError, trackError, getHealthStatus, sendDailySummary } from './services/alerts.js';
+import { sendAlert, alertError, trackError, getHealthStatus, sendDailySummary, sendAllClientDailySummaries, sendAllClientMonthlySummaries } from './services/alerts.js';
+import { checkUsageCaps, getMonthlyUsage, getCapsForClient, calculateOverageCharges } from './services/usage-limits.js';
 import { emitEvent } from './services/events.js';
 import { getRevenueByClient, getConversionFunnel, getUsageSummary, getTopProducts, getAICostSummary } from './services/analytics.js';
+import { sendWhatsAppMessage } from './services/whatsapp.js';
 
 // ============================================================
 // STARTUP VALIDATION — fail fast before the server accepts traffic
@@ -67,6 +70,12 @@ const fastify = Fastify({
     level: process.env.LOG_LEVEL || 'info',
     transport: process.env.NODE_ENV !== 'production' ? { target: 'pino-pretty' } : undefined
   }
+});
+
+// CORS — allow dashboard portal to call API
+await fastify.register(cors, {
+  origin: process.env.PORTAL_URL || true, // restrict in production via PORTAL_URL env var
+  methods: ['GET', 'POST', 'DELETE'],
 });
 
 // Global rate limit — 200 req/min per IP (protects all routes)
@@ -149,37 +158,140 @@ fastify.get('/health', async (_request, reply) => {
   return reply.code(code).send(health);
 });
 
-// Analytics API — protected by ANALYTICS_KEY env var
+// Analytics API — owner sees all, client sees own data only
 fastify.get('/api/analytics/revenue', async (request, reply) => {
   const query = request.query as any;
-  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
-  return getRevenueByClient(query.client_id, parseInt(query.months) || 3);
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+  const clientId = auth.role === 'client' ? auth.clientId : query.client_id;
+  return getRevenueByClient(clientId, parseInt(query.months) || 3);
 });
 
 fastify.get('/api/analytics/funnel', async (request, reply) => {
   const query = request.query as any;
-  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
-  if (!query.client_id) return reply.code(400).send({ error: 'client_id required' });
-  return getConversionFunnel(query.client_id, parseInt(query.months) || 3);
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+  const clientId = auth.role === 'client' ? auth.clientId! : query.client_id;
+  if (!clientId) return reply.code(400).send({ error: 'client_id required' });
+  return getConversionFunnel(clientId, parseInt(query.months) || 3);
 });
 
 fastify.get('/api/analytics/usage', async (request, reply) => {
   const query = request.query as any;
-  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
-  return getUsageSummary(query.client_id, parseInt(query.months) || 3);
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+  const clientId = auth.role === 'client' ? auth.clientId : query.client_id;
+  return getUsageSummary(clientId, parseInt(query.months) || 3);
 });
 
 fastify.get('/api/analytics/products', async (request, reply) => {
   const query = request.query as any;
-  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
-  if (!query.client_id) return reply.code(400).send({ error: 'client_id required' });
-  return getTopProducts(query.client_id, parseInt(query.months) || 3, parseInt(query.limit) || 10);
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+  const clientId = auth.role === 'client' ? auth.clientId! : query.client_id;
+  if (!clientId) return reply.code(400).send({ error: 'client_id required' });
+  return getTopProducts(clientId, parseInt(query.months) || 3, parseInt(query.limit) || 10);
 });
 
 fastify.get('/api/analytics/ai-cost', async (request, reply) => {
   const query = request.query as any;
-  if (query.key !== process.env.ANALYTICS_KEY) return reply.code(401).send({ error: 'unauthorized' });
-  return getAICostSummary(query.client_id, parseInt(query.months) || 3);
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+  const clientId = auth.role === 'client' ? auth.clientId : query.client_id;
+  return getAICostSummary(clientId, parseInt(query.months) || 3);
+});
+
+// ============================================================
+// DASHBOARD API — auth, conversations, clients, alerts
+// ============================================================
+
+// Auth validation — returns role + client info
+fastify.get('/api/auth/validate', async (request, reply) => {
+  const query = request.query as any;
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'invalid key' });
+  return auth;
+});
+
+// Conversation list (paginated)
+fastify.get('/api/conversations', async (request, reply) => {
+  const query = request.query as any;
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+
+  // Clients can only see their own conversations
+  const clientId = auth.role === 'client' ? auth.clientId : query.client_id;
+
+  return listConversations({
+    clientId,
+    state: query.state,
+    page: parseInt(query.page) || 1,
+    limit: parseInt(query.limit) || 20,
+  });
+});
+
+// Conversation detail (full messages)
+fastify.get('/api/conversations/:phone', async (request, reply) => {
+  const query = request.query as any;
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+
+  const { phone } = request.params as { phone: string };
+  const clientId = auth.role === 'client' ? auth.clientId! : query.client_id;
+  if (!clientId) return reply.code(400).send({ error: 'client_id required' });
+
+  const conv = await getConversationDetail(clientId, phone);
+  if (!conv) return reply.code(404).send({ error: 'conversation not found' });
+  return conv;
+});
+
+// Send message to a customer from the dashboard
+fastify.post('/api/conversations/:phone/send', async (request, reply) => {
+  const query = request.query as any;
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+
+  const { phone } = request.params as { phone: string };
+  const clientId = auth.role === 'client' ? auth.clientId! : query.client_id;
+  if (!clientId) return reply.code(400).send({ error: 'client_id required' });
+
+  const body = request.body as any;
+  if (!body?.message || typeof body.message !== 'string') {
+    return reply.code(400).send({ error: 'message required' });
+  }
+
+  const client = await getClientById(clientId);
+  if (!client) return reply.code(404).send({ error: 'client not found' });
+
+  const sent = await sendWhatsAppMessage(phone, body.message, client.access_token, client.phone_number_id);
+  if (sent) {
+    emitEvent(clientId, 'message_out', phone, { source: 'dashboard', length: body.message.length });
+  }
+  return { success: sent };
+});
+
+// Client list (owner only)
+fastify.get('/api/clients', async (request, reply) => {
+  const query = request.query as any;
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+  if (auth.role !== 'owner') return reply.code(403).send({ error: 'owner only' });
+
+  return listClients();
+});
+
+// Alert history
+fastify.get('/api/alerts', async (request, reply) => {
+  const query = request.query as any;
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+
+  const clientId = auth.role === 'client' ? auth.clientId : query.client_id;
+
+  return listAlerts({
+    clientId,
+    limit: parseInt(query.limit) || 50,
+  });
 });
 
 // PDPL — Right to deletion (DELETE /api/customer/:phone)
@@ -253,6 +365,9 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
       console.log(`Message from ${maskPhone(customerPhone)} [${messageText.length} chars]`);
       emitEvent(client.id, 'message_in', customerPhone, { length: messageText.length });
       await handleIncomingMessage(phoneNumberId, customerPhone, messageText, client.access_token);
+
+      // Fire-and-forget usage check (80% warning + overage log). Non-blocking.
+      checkUsageCaps(client).catch(err => console.error('Usage check error:', err));
     } catch (error) {
       console.error('Webhook processing error:', error);
       emitEvent('system', 'error', customerPhone || undefined, { error: (error as Error)?.message });
@@ -277,6 +392,7 @@ fastify.post('/cron/data-retention', async (request, reply) => {
 });
 
 // Cron endpoint for daily summary (run once daily at 10pm Riyadh)
+// Sends: (1) platform-wide summary to owner, (2) per-client summary to each client's agent phone
 fastify.post('/cron/daily-summary', async (request, reply) => {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
@@ -286,8 +402,42 @@ fastify.post('/cron/daily-summary', async (request, reply) => {
       return reply.status(401).send({ error: 'Unauthorized' });
     }
   }
-  const sent = await sendDailySummary();
-  return { success: sent };
+  const ownerSent = await sendDailySummary();
+  const clientResult = await sendAllClientDailySummaries();
+  return { ownerSent, clients: clientResult };
+});
+
+// Cron endpoint for monthly summary (run on the 1st of each month)
+// Sends previous-month stats (orders, revenue, conversion rate, avg order value) to each client
+fastify.post('/cron/monthly-summary', async (request, reply) => {
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    const authHeader = request.headers['authorization'] as string | undefined;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (token !== cronSecret) {
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
+  }
+  const result = await sendAllClientMonthlySummaries();
+  return { clients: result };
+});
+
+// Per-client usage endpoint (for dashboard) — returns current month usage + caps + overage
+fastify.get<{ Params: { clientId: string }; Querystring: { key?: string } }>('/api/usage/:clientId', async (request, reply) => {
+  const { clientId } = request.params;
+  const { key } = request.query;
+  if (!key) return reply.code(401).send({ error: 'key required' });
+  const auth = await validateDashboardKey(key);
+  if (!auth || (auth.role !== 'owner' && auth.clientId !== clientId)) {
+    return reply.code(403).send({ error: 'forbidden' });
+  }
+  const client = await getClientById(clientId);
+  if (!client) return reply.code(404).send({ error: 'client not found' });
+
+  const usage = await getMonthlyUsage(clientId);
+  const caps = getCapsForClient(client);
+  const overage = calculateOverageCharges(usage, caps);
+  return { usage, caps, overage };
 });
 
 // Shopify orders/paid webhook

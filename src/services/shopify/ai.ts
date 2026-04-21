@@ -60,7 +60,10 @@ ${productList}`;
       _anthropic.messages.create({
         model: AI_MODEL,
         max_tokens: 150,
-        system,
+        // Prompt caching: product catalog + store persona are stable across turns.
+        system: [
+          { type: 'text', text: system, cache_control: { type: 'ephemeral' } }
+        ] as any,
         messages: recent
       }),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10_000))

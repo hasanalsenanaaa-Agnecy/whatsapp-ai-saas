@@ -94,7 +94,7 @@ interface PromptContext {
   customSystemPrompt?: string;
 }
 
-function buildSystemPrompt(ctx: PromptContext): string {
+function buildSystemPrompt(ctx: PromptContext): { stable: string; dynamic: string } {
   // Questions the business wants answered
   const questionsText = ctx.questions.length > 0
     ? ctx.questions.map((q, i) => `${i + 1}. ${q.text} — خيارات: [${q.options.join('، ')}] → حقل: ${q.field}`).join('\n')
@@ -122,7 +122,7 @@ function buildSystemPrompt(ctx: PromptContext): string {
 • ردودك قصيرة: 1-3 جمل كحد أقصى
 • ودود ومحترف — كلمات مثل: زين، تمام، حاضر، إن شاء الله، ماشي`;
 
-  return `${personality}
+  const stable = `${personality}
 
 ━━━ المعلومات المطلوبة ━━━
 اجمع هذه المعلومات بالترتيب (تخطى ما هو معروف):
@@ -166,12 +166,14 @@ ${kbText ? `\n━━━ معلومات العمل ━━━\n${kbText}` : ''}
 ━━━ قواعد مهمة ━━━
 • رد المريض بعد أي سؤال = الإجابة على هذا السؤال — احفظه فوراً وانتقل
 • لا تكرر سؤال تم الإجابة عليه
-• لا تغير اسم العميل — احفظه كما كتبه بالضبط
+• لا تغير اسم العميل — احفظه كما كتبه بالضبط`;
 
-━━━ الجلسة الحالية ━━━
+  const dynamic = `━━━ الجلسة الحالية ━━━
 اليوم: ${today}
 حالة الحجز:
 ${stateText}`;
+
+  return { stable, dynamic };
 }
 
 // ============================================================
@@ -198,7 +200,7 @@ export async function getAIResponse(
     };
   }
 
-  const systemPrompt = buildSystemPrompt(ctx);
+  const { stable, dynamic } = buildSystemPrompt(ctx);
 
   // Keep last 10 messages for context
   const recent = conversationHistory.slice(-10).map(m => ({
@@ -217,7 +219,12 @@ export async function getAIResponse(
       anthropic.messages.create({
         model: AI_MODEL,
         max_tokens: 400,
-        system: systemPrompt,
+        // Prompt caching: stable block is cached per tenant (ephemeral, 5-min TTL);
+        // dynamic block (date + booking state) changes each turn so it's not cached.
+        system: [
+          { type: 'text', text: stable, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: dynamic }
+        ] as any,
         messages: recent
       }),
       timeout

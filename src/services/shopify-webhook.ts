@@ -10,6 +10,7 @@ import { sendWhatsAppMessage, sendWhatsAppButtons } from './whatsapp.js';
 import { formatPrice } from './shopify.js';
 import { maskPhone } from '../utils/buttons.js';
 import { emitEvent } from './events.js';
+import { saveOrderToSheet } from './googleSheets.js';
 
 // ============================================================
 // TYPES
@@ -270,6 +271,22 @@ ${productsText}
     } catch (err) {
       console.error('Shopify webhook: owner notify error:', err);
     }
+  }
+
+  // Log order to Google Sheets (client's backup ledger)
+  try {
+    await saveOrderToSheet(client, {
+      orderNumber: orderNumber || `unknown-${Date.now()}`,
+      customerName: conv.data.name || customerPhone,
+      customerPhone: conv.phone,
+      products: productsText,
+      total: totalPrice,
+      currency,
+      checkoutUrl: conv.data._checkout?.url,
+      status: 'paid',
+    });
+  } catch (err) {
+    console.error('Shopify webhook: sheets order save error:', err);
   }
 
   // Save / update lead with cart data

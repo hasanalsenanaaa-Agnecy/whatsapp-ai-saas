@@ -72,6 +72,13 @@ export interface ClientSettings {
     cheap?: string;
     type?: string;
   };
+
+  // Monthly usage caps (enforced via usage-limits service)
+  usage_caps?: {
+    conversations?: number;    // unique customer sessions per calendar month
+    ai_messages?: number;      // ai_call events per calendar month
+    whatsapp_outbound?: number;// outbound messages per calendar month (not enforced, tracked only)
+  };
 }
 
 // ── Knowledge base ───────────────────────────────────────────
