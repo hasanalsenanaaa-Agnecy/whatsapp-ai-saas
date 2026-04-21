@@ -248,8 +248,8 @@ async function handleWelcome(
       await sendWhatsAppButtons(
         conv.phone,
         msg(
-          'نحن نحفظ بيانات المحادثة لمعالجة طلبك وتحسين الخدمة. بالاستمرار، أنت توافق على سياسة الخصوصية.\n\n🔒 بياناتك محمية ويمكنك طلب حذفها في أي وقت.',
-          'We store conversation data to process your order and improve our service. By continuing, you agree to our privacy policy.\n\n🔒 Your data is protected and you can request deletion at any time.',
+          'نحفظ بيانات محادثتك لمعالجة طلبك. بالاستمرار أنت توافق على سياسة الخصوصية.',
+          'We store your conversation data to process your order. By continuing, you agree to our privacy policy.',
           l
         ),
         [
