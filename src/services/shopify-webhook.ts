@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import { getClientByShopifyDomain, getConversation, saveConversation, createLead } from './database.js';
 import { sendWhatsAppMessage, sendWhatsAppButtons } from './whatsapp.js';
 import { formatPrice } from './shopify.js';
+import { wa } from './shopify/types.js';
 import { maskPhone } from '../utils/buttons.js';
 import { emitEvent } from './events.js';
 import { saveOrderToSheet } from './googleSheets.js';
@@ -226,7 +227,7 @@ ${productsText}
 📅 التاريخ: ${new Date().toLocaleDateString('ar-SA', { timeZone: 'Asia/Riyadh' })}
 ━━━━━━━━━━━━━━━
 
-شكراً لتسوقك من *${storeName}*! 🙏❤️
+شكراً لتسوقك من *${wa(storeName)}*! 🙏❤️
 راح نتواصل معك بخصوص التوصيل قريباً 📦`;
 
     await sendWhatsAppMessage(conv.phone, receipt, accessToken, client.phone_number_id);

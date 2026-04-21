@@ -4,6 +4,7 @@
 
 import {
   fetchProducts,
+  fetchProductsOrThrow,
   formatPrice,
   type ShopifyProduct
 } from '../shopify.js';
@@ -27,6 +28,30 @@ export async function fetchProductsCached(domain: string, storefrontToken?: stri
   const products = await fetchProducts(domain, storefrontToken, 10, lang);
   _productCache.set(cacheKey, { products, fetchedAt: Date.now() });
   return products;
+}
+
+// Variant that distinguishes "Shopify unreachable" from "store genuinely
+// empty". `fetchProducts` catches errors and returns []; for the welcome
+// greeting we want to show a retry message on API failure but the normal
+// "no products" greeting when the catalog is truly empty (fgf.md #46).
+export async function fetchProductsWithStatus(
+  domain: string,
+  storefrontToken?: string,
+  lang = 'ar'
+): Promise<{ products: ShopifyProduct[]; apiError: boolean }> {
+  const cacheKey = `${domain}_${lang}`;
+  const cached = _productCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < PRODUCT_CACHE_TTL_MS) {
+    return { products: cached.products, apiError: false };
+  }
+  try {
+    const products = await fetchProductsOrThrow(domain, storefrontToken, 10, lang);
+    _productCache.set(cacheKey, { products, fetchedAt: Date.now() });
+    return { products, apiError: false };
+  } catch (err) {
+    console.error('❌ fetchProductsWithStatus error:', err);
+    return { products: [], apiError: true };
+  }
 }
 
 // ============================================================
@@ -80,6 +105,21 @@ export function isQuestionMessage(message: string): boolean {
 }
 
 // ============================================================
+// WEIGHT / UNIT REGEXES — single source of truth
+//
+// Covers English (g, kg, ml, l, gr, gm, oz, lb) and Arabic (غرام,
+// كيلو, جرام, رطل, أونصة/اونصة/اونسه, مل, لتر). Extend here only.
+// ============================================================
+
+const WEIGHT_UNITS = 'g|kg|ml|l|غرام|جرام|كيلو|رطل|أونصة|اونصة|اونسه|مل|لتر|gr|gm|oz|lb';
+
+// Strip a trailing weight phrase from a product title ("تمر خلاص 500g" → "تمر خلاص")
+export const WEIGHT_STRIP_REGEX = new RegExp(`\\s*\\d+\\s*(${WEIGHT_UNITS})\\s*`, 'i');
+
+// Capture a weight phrase from a product title ("خلاص 1kg" → "1kg")
+export const WEIGHT_MATCH_REGEX = new RegExp(`(\\d+\\s*(${WEIGHT_UNITS}))`, 'i');
+
+// ============================================================
 // PRODUCT & VARIANT MATCHING
 // ============================================================
 
@@ -93,28 +133,50 @@ export function matchProduct(message: string, products: ShopifyProduct[]): Shopi
     return products[idx] || null;
   }
 
-  // Match by number
+  // Match by number — only when the message is PURELY digits. Products
+  // aren't displayed with numbers in the UI (we use pick_N tap IDs), so a
+  // bare "5" from a customer is an ambiguous guess at list position, and
+  // "5 kg of خلاص" should never be interpreted as "product #5" (critique
+  // #13). Requiring the whole trimmed message to be digits prevents that.
   const normalized = lower.replace(/[٠١٢٣٤٥٦٧٨٩]/g, d =>
     String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))
-  );
-  const num = parseInt(normalized);
-  if (num >= 1 && num <= products.length) {
-    return products[num - 1] || null;
+  ).trim();
+  if (/^\d+$/.test(normalized)) {
+    const num = parseInt(normalized);
+    if (num >= 1 && num <= products.length) {
+      return products[num - 1] || null;
+    }
   }
 
-  // Match by title (partial)
-  const byTitle = products.find(p =>
+  // Match by title substring — prefer the most specific match. If multiple
+  // products share the same short keyword (e.g. two "خلاص" products),
+  // return null so the caller can disambiguate rather than silently
+  // picking the first one (fgf.md #16).
+  const titleMatches = products.filter(p =>
     p.title.toLowerCase().includes(lower) || lower.includes(p.title.toLowerCase())
   );
-  if (byTitle) return byTitle;
-
-  // Match by keywords in title
-  const words = lower.split(/\s+/).filter(w => w.length > 2);
-  for (const product of products) {
-    const titleLower = product.title.toLowerCase();
-    if (words.some(w => titleLower.includes(w))) return product;
+  if (titleMatches.length === 1) return titleMatches[0]!;
+  if (titleMatches.length > 1) {
+    // If the customer's message is itself a full product title (exact or
+    // "message contains title"), the longest matching title wins — that
+    // identifies the more specific product ("خلاص فاخر" beats "خلاص").
+    const byLongest = [...titleMatches].sort((a, b) => b.title.length - a.title.length);
+    const top = byLongest[0]!;
+    const second = byLongest[1]!;
+    if (top.title.length > second.title.length && lower.includes(top.title.toLowerCase())) {
+      return top;
+    }
+    return null;
   }
 
+  // Match by keywords in title — same disambiguation rule
+  const words = lower.split(/\s+/).filter(w => w.length > 2);
+  const keywordMatches = products.filter(p => {
+    const titleLower = p.title.toLowerCase();
+    return words.some(w => titleLower.includes(w));
+  });
+  if (keywordMatches.length === 1) return keywordMatches[0]!;
+  // 2+ keyword matches → ambiguous, let caller reprompt or offer AI answer
   return null;
 }
 
@@ -238,6 +300,34 @@ export function addToCart(
     price,
     quantity
   });
+  // Timestamp the cart so stale carts (e.g. from a months-old session) can
+  // be dropped on resume with a fresh-start prompt (fgf.md #32).
+  conv.data._cartUpdatedAt = new Date().toISOString();
+}
+
+// ============================================================
+// CART EXPIRY — drop carts older than 14 days on resume.
+// Prices drift, stock changes; an uninformed checkout frustrates
+// the customer. Called from the main shopify router before any
+// cart-sensitive branching.
+// ============================================================
+
+const CART_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+
+export function expireStaleCart(conv: ConversationState): { expired: boolean; priorItems: CartItem[] } {
+  const cart: CartItem[] = conv.data._cart || [];
+  if (cart.length === 0) return { expired: false, priorItems: [] };
+  const updatedAt = conv.data._cartUpdatedAt as string | undefined;
+  if (!updatedAt) return { expired: false, priorItems: [] };
+  const age = Date.now() - new Date(updatedAt).getTime();
+  if (age < CART_MAX_AGE_MS) return { expired: false, priorItems: [] };
+  // Return the prior items so the caller can show the customer what was in
+  // the cart before clearing — saves them from having to remember. We still
+  // clear the cart (prices/stock may have drifted); the customer re-adds
+  // via the product list at current prices.
+  conv.data._cart = [];
+  delete conv.data._cartUpdatedAt;
+  return { expired: true, priorItems: cart };
 }
 
 export function pushCurrentOrderToHistory(conv: ConversationState): void {
@@ -279,6 +369,8 @@ export function resetCurrentOrder(conv: ConversationState): void {
   delete conv.data._paymentNudgeSent;
   delete conv.data._cartRecoverySent;
   delete conv.data._checkoutInProgress;
+  delete conv.data._checkoutInProgressAt;
+  delete conv.data._paymentHelpLastNotifiedAt;
   // Legacy flags (pre-refactor) — clean up old sessions
   delete conv.data._paymentSelfReported;
   delete conv.data._paymentReportedAt;
@@ -290,6 +382,7 @@ export function resetCurrentOrder(conv: ConversationState): void {
   delete conv.data._timeoutRecoveryOffered;
   delete conv.data._aiAnswerCount;
   delete conv.data._aiExhaustedNotified;
+  delete conv.data._aiBudgetRefunded;
   delete conv.data._gratitudeAcked;
   conv.data._reprompted = null;
   // Clear intent so returning customers see the menu again
@@ -298,6 +391,8 @@ export function resetCurrentOrder(conv: ConversationState): void {
   // Clear order status fields
   delete conv.data._osOrderNum;
   delete conv.data._osOrderNumAsked;
+  delete conv.data._osContextForwarded;
+  delete conv.data._osLastForwardedAt;
   delete conv.data._osEmail;
   delete conv.data._osEmailAsked;
   delete conv.data._orderStatusUrl;
@@ -332,15 +427,38 @@ export function smartVariantTitle(variantTitle: string, price: string, currency:
 }
 
 // ============================================================
-// REPROMPT HELPERS — show once then silence
+// CLEAN DESCRIPTION — unified helper used by all product views
+// Strips HTML, collapses whitespace, truncates to max chars.
+// ============================================================
+
+export function cleanDescription(raw: string | undefined | null, max: number): string {
+  if (!raw) return '';
+  const stripped = raw.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  if (stripped.length <= max) return stripped;
+  return stripped.substring(0, max - 1).trimEnd() + '…';
+}
+
+// ============================================================
+// REPROMPT HELPERS — three-step pattern per state:
+//   1st unrecognized → reprompt  (markReprompted)
+//   2nd unrecognized → hint      (markHinted)
+//   3rd+ unrecognized → silence
 // ============================================================
 
 export function shouldSilence(conv: ConversationState): boolean {
+  return conv.data._reprompted === conv.data._shopifyState + '_hinted';
+}
+
+export function shouldSendHint(conv: ConversationState): boolean {
   return conv.data._reprompted === conv.data._shopifyState;
 }
 
 export function markReprompted(conv: ConversationState): void {
   conv.data._reprompted = conv.data._shopifyState;
+}
+
+export function markHinted(conv: ConversationState): void {
+  conv.data._reprompted = conv.data._shopifyState + '_hinted';
 }
 
 // ============================================================

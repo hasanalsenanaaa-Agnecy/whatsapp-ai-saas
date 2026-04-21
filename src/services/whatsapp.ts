@@ -1,10 +1,30 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import { maskPhone } from '../utils/buttons.js';
+import { emitEvent } from './events.js';
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v18.0';
 const REQUEST_TIMEOUT_MS = 10_000; // 10 seconds
 const MAX_RETRIES = 3;
 
 interface ButtonOption { id: string; title: string; description?: string; }
+
+// ============================================================
+// CLIENT CONTEXT — per-request clientId used to emit `message_out`
+// events for quota tracking, without plumbing clientId through every
+// send call. Set once at the top of a conversation turn via
+// withClientContext, read from each send on success.
+// ============================================================
+
+const clientContext = new AsyncLocalStorage<string>();
+
+export function withClientContext<T>(clientId: string, fn: () => Promise<T>): Promise<T> {
+  return clientContext.run(clientId, fn);
+}
+
+function trackOutbound(to: string, type: string): void {
+  const cid = clientContext.getStore();
+  if (cid) emitEvent(cid, 'message_out', to, { type });
+}
 
 // ============================================================
 // SIM MODE — captures outbound messages to an in-memory buffer
@@ -107,6 +127,7 @@ export async function sendWhatsAppMessage(to: string, message: string, accessTok
       return false;
     }
     console.log(`✅ Message sent to ${maskPhone(to)}`);
+    trackOutbound(to, 'text');
     return true;
   } catch (error) {
     console.error('❌ Send failed:', error);
@@ -147,6 +168,7 @@ export async function sendWhatsAppButtons(to: string, bodyText: string, buttons:
       return sendWhatsAppMessage(to, bodyText, accessToken, phoneNumberId);
     }
     console.log(`✅ Buttons sent to ${maskPhone(to)}`);
+    trackOutbound(to, 'buttons');
     return true;
   } catch (error) {
     return sendWhatsAppMessage(to, bodyText, accessToken, phoneNumberId);
@@ -175,6 +197,7 @@ export async function sendWhatsAppImage(to: string, imageUrl: string, caption: s
       return sendWhatsAppMessage(to, `${caption}\n\n🖼️ ${imageUrl}`, accessToken, phoneNumberId);
     }
     console.log(`✅ Image sent to ${maskPhone(to)}`);
+    trackOutbound(to, 'image');
     return true;
   } catch (error) {
     return sendWhatsAppMessage(to, `${caption}\n\n🖼️ ${imageUrl}`, accessToken, phoneNumberId);
@@ -220,6 +243,7 @@ export async function sendWhatsAppButtonsWithImage(to: string, imageUrl: string,
       return sendWhatsAppButtons(to, bodyText, buttons, accessToken, phoneNumberId);
     }
     console.log(`✅ Buttons+image sent to ${maskPhone(to)}`);
+    trackOutbound(to, 'buttons_image');
     return true;
   } catch (error) {
     return sendWhatsAppButtons(to, bodyText, buttons, accessToken, phoneNumberId);
@@ -261,6 +285,7 @@ export async function sendWhatsAppList(to: string, bodyText: string, buttonText:
       return sendWhatsAppMessage(to, numberedText, accessToken, phoneNumberId);
     }
     console.log(`✅ List sent to ${maskPhone(to)}`);
+    trackOutbound(to, 'list');
     return true;
   } catch (error) {
     const numberedText = bodyText + '\n\n' + options.map((opt, i) => `${i + 1}️⃣ ${opt.title}`).join('\n');

@@ -63,8 +63,25 @@ export interface ClientSettings {
   welcome_message?: string;
   thank_you_message?: string;
 
+  // Customer-service acknowledgment response time — shown in the
+  // "we'll contact you in X" line. Defaults to 30 دقيقة / 30 minutes.
+  cs_response_time_ar?: string;
+  cs_response_time_en?: string;
+
+  // Language for owner/agent notifications ("ar" | "en"). Independent of
+  // the customer's language — a Saudi shop with English-speaking staff
+  // wants customer messages in Arabic but owner alerts in English.
+  // Defaults to 'ar'.
+  owner_notification_lang?: 'ar' | 'en';
+
   // Per-client AI system prompt (overrides default Gulf Arabic prompt)
   system_prompt?: string;
+
+  // Store policies appended to AI system prompt so Claude can answer
+  // shipping / refund / hours / location questions accurately instead
+  // of deflecting to the owner. Additive — works alongside the default
+  // or a custom system_prompt.
+  policies?: string;
 
   // Assistant labels (for product categories)
   assistant_labels?: {

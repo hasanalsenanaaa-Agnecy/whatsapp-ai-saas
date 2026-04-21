@@ -9,11 +9,13 @@ import { sql } from './database.js';
 export type EventType =
   | 'message_in'
   | 'message_out'
+  | 'conversation_start'
   | 'checkout_created'
   | 'payment_verified'
   | 'ai_call'
   | 'escalation'
   | 'lead_captured'
+  | 'data_deletion_request'
   | 'error';
 
 /**

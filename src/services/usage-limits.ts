@@ -7,8 +7,10 @@
 // they can be billed.
 //
 // Usage count sources (events table):
-//   - conversations = distinct phones with message_in this month
+//   - conversations = count of conversation_start events this month
+//     (a "conversation" = one 4h session per customer, per the contract)
 //   - ai_messages   = count of ai_call events this month
+//   - whatsapp_outbound = count of message_out events this month
 //
 // Cap source: client.settings.usage_caps (falls back to
 // DEFAULT_CAPS below).
@@ -65,10 +67,10 @@ export async function getMonthlyUsage(clientId: string): Promise<UsageSnapshot> 
   try {
     const [conv, ai, out] = await Promise.all([
       sql`
-        SELECT COUNT(DISTINCT phone) AS count
+        SELECT COUNT(*) AS count
         FROM events
         WHERE client_id = ${clientId}
-          AND event_type = 'message_in'
+          AND event_type = 'conversation_start'
           AND created_at >= ${monthStartISO}
       `,
       sql`

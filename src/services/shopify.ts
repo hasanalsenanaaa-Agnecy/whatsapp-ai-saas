@@ -309,19 +309,33 @@ export async function fetchProducts(
   lang = 'ar'
 ): Promise<ShopifyProduct[]> {
   try {
-    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, PRODUCTS_QUERY, {
-      first: limit,
-      sortKey: 'BEST_SELLING',
-      reverse: false,
-      language: lang === 'en' ? 'EN' : 'AR'
-    }, lang) as {
-      products: { edges: { node: Record<string, unknown> }[] };
-    };
-    return data.products.edges.map(e => parseProduct(e.node));
+    return await fetchProductsOrThrow(shopifyDomain, storefrontToken, limit, lang);
   } catch (error) {
     console.error('❌ Shopify fetchProducts error:', error);
     return [];
   }
+}
+
+/**
+ * Same as fetchProducts but propagates errors. Use this when the caller
+ * needs to distinguish "store empty" from "Shopify unreachable" for UX
+ * (e.g. retry button vs no-products greeting).
+ */
+export async function fetchProductsOrThrow(
+  shopifyDomain: string,
+  storefrontToken?: string,
+  limit = 20,
+  lang = 'ar'
+): Promise<ShopifyProduct[]> {
+  const data = await shopifyGraphQL(shopifyDomain, storefrontToken, PRODUCTS_QUERY, {
+    first: limit,
+    sortKey: 'BEST_SELLING',
+    reverse: false,
+    language: lang === 'en' ? 'EN' : 'AR'
+  }, lang) as {
+    products: { edges: { node: Record<string, unknown> }[] };
+  };
+  return data.products.edges.map(e => parseProduct(e.node));
 }
 
 /**

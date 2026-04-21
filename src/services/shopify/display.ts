@@ -10,12 +10,13 @@ import {
   sendWhatsAppMessage,
   sendWhatsAppButtons,
   sendWhatsAppButtonsWithImage,
+  sendWhatsAppImage,
   sendWhatsAppList
 } from '../whatsapp.js';
 import { smartTitle, truncate } from '../../utils/buttons.js';
 import type { ClientConfig } from '../../types/client.js';
 import { msg, type ShopifyAgentConfig, type ConversationState, type CartItem } from './types.js';
-import { smartVariantTitle } from './helpers.js';
+import { smartVariantTitle, cleanDescription, WEIGHT_STRIP_REGEX, WEIGHT_MATCH_REGEX } from './helpers.js';
 
 // ============================================================
 // SHOW VARIANT OR PRODUCT VIEW
@@ -30,28 +31,40 @@ export async function showVariantOrProductView(
   accessToken: string,
   product: ShopifyProduct
 ): Promise<void> {
+  conv.data._selectedProduct = product;
   const l: string = conv.data._lang || 'ar';
   const availableVariants = product.variants.filter((v: any) => v.available);
   const isMultiVariant = availableVariants.length > 1 && availableVariants.some((v: any) => v.title !== 'Default Title');
 
   if (isMultiVariant) {
-    // Ask for weight/variant before showing action buttons
-    const promptText = msg(`*${product.title}*\nاختر الوزن:`, `*${product.title}*\nChoose weight:`, l);
+    // Multi-variant: show product view (image + desc + price range) with weight picker
+    const displayTitle = product.title.replace(/[،,]\s*$/, '').trim();
+    const price = formatPrice(product.priceMin, config.currency);
+    const priceRange = product.priceMax && product.priceMax !== product.priceMin
+      ? `${price} — ${formatPrice(product.priceMax, config.currency)}`
+      : price;
+    const desc = cleanDescription(product.description, 100);
+    const pickPrompt = msg('اختر الوزن:', 'Choose weight:', l);
+    const bodyText = `*${displayTitle}*\n${priceRange}${desc ? '\n\n' + desc : ''}\n\n${pickPrompt}`;
+
     if (availableVariants.length <= 3) {
-      await sendWhatsAppButtons(
-        conv.phone,
-        promptText,
-        availableVariants.map((v: any, i: number) => ({
-          id: `var_${i}`,
-          title: smartVariantTitle(v.title, v.price, config.currency, 20)
-        })),
-        accessToken,
-        client.phone_number_id
-      );
+      const buttons = availableVariants.map((v: any, i: number) => ({
+        id: `var_${i}`,
+        title: smartVariantTitle(v.title, v.price, config.currency, 20)
+      }));
+      if (product.imageUrl) {
+        await sendWhatsAppButtonsWithImage(conv.phone, product.imageUrl, bodyText, buttons, accessToken, client.phone_number_id);
+      } else {
+        await sendWhatsAppButtons(conv.phone, bodyText, buttons, accessToken, client.phone_number_id);
+      }
     } else {
+      // 4+ variants: image + caption first (WhatsApp lists don't support image headers), then the list
+      if (product.imageUrl) {
+        await sendWhatsAppImage(conv.phone, product.imageUrl, `*${displayTitle}*\n${priceRange}${desc ? '\n\n' + desc : ''}`, accessToken, client.phone_number_id);
+      }
       await sendWhatsAppList(
         conv.phone,
-        promptText,
+        pickPrompt,
         msg('الأوزان', 'Weights', l),
         availableVariants.slice(0, 10).map((v: any, i: number) => ({
           id: `var_${i}`,
@@ -63,16 +76,68 @@ export async function showVariantOrProductView(
     }
     conv.data._shopifyState = 'variant_select';
   } else {
-    // Single variant — set it and go straight to quantity
+    // Single variant — go straight to qty screen (keeps product image + desc visible)
     const variant = availableVariants[0] || product.variants[0];
     conv.data._selectedVariant = variant;
     conv.data._selectedVariantId = variant?.id;
     conv.data._selectedVariantTitle = variant?.title;
-    const label = variant?.title && variant.title !== 'Default Title'
-      ? `${product.title} — ${variant.title}`
-      : product.title;
-    await askQuantity(client, conv, config, accessToken, label);
+    await showProductWithQty(client, conv, config, accessToken, product);
   }
+}
+
+// ============================================================
+// PRODUCT WITH QTY — full product card (image + desc + price)
+// with [qty_1, qty_2, qty_3] buttons. Used after variant pick
+// or for single-variant products, so image stays visible through
+// the add-to-cart decision.
+// ============================================================
+
+export async function showProductWithQty(
+  client: ClientConfig,
+  conv: ConversationState,
+  config: ShopifyAgentConfig,
+  accessToken: string,
+  product: ShopifyProduct
+): Promise<void> {
+  conv.data._selectedProduct = product;
+  const l: string = conv.data._lang || 'ar';
+
+  const displayTitle = product.title.replace(/[،,]\s*$/, '').trim();
+  const selectedVariantTitle = conv.data._selectedVariantTitle;
+  const variantLabel = selectedVariantTitle && selectedVariantTitle !== 'Default Title'
+    ? ` — ${selectedVariantTitle}` : '';
+
+  // Use selected variant's actual price when available
+  const variant = conv.data._selectedVariant;
+  const unitPrice = variant?.price || product.priceMin;
+  const price = formatPrice(unitPrice, config.currency);
+
+  // Low-stock warning scoped to the selected variant only
+  const stockQty = variant && typeof (variant as any).quantityAvailable === 'number'
+    ? (variant as any).quantityAvailable
+    : null;
+  const lowStockNote = (stockQty !== null && stockQty > 0 && stockQty <= 5)
+    ? `\n⚠️ ${msg(`متبقي ${stockQty} فقط!`, `Only ${stockQty} left!`, l)}`
+    : '';
+
+  const desc = cleanDescription(product.description, 100);
+  const qtyPrompt = msg('كم الكمية؟\n_(أو اكتب أي رقم)_', 'How many?\n_(or type any number)_', l);
+
+  const bodyText = `*${displayTitle}${variantLabel}*\n${price}${lowStockNote}${desc ? '\n\n' + desc : ''}\n\n${qtyPrompt}`;
+
+  const buttons = [
+    { id: 'qty_1', title: '1' },
+    { id: 'qty_2', title: '2' },
+    { id: 'qty_3', title: '3' }
+  ];
+
+  if (product.imageUrl) {
+    await sendWhatsAppButtonsWithImage(conv.phone, product.imageUrl, bodyText, buttons, accessToken, client.phone_number_id);
+  } else {
+    await sendWhatsAppButtons(conv.phone, bodyText, buttons, accessToken, client.phone_number_id);
+  }
+
+  conv.data._shopifyState = 'quantity_select';
 }
 
 // ============================================================
@@ -100,10 +165,7 @@ export async function showProductView(
     ? `${price} — ${formatPrice(product.priceMax, config.currency)}`
     : price;
 
-  // Short real description from Shopify (strip HTML, max 100 chars)
-  const cleanDesc = product.description
-    ? product.description.replace(/<[^>]*>/g, '').trim().substring(0, 100)
-    : '';
+  const cleanDesc = cleanDescription(product.description, 100);
 
   // Low stock warning — show if any available variant has quantityAvailable <= 5
   const allVariants = product.variants || [];
@@ -155,43 +217,56 @@ export async function showProductView(
 export async function showProductList(
   client: ClientConfig,
   conv: ConversationState,
-  _config: ShopifyAgentConfig,
+  config: ShopifyAgentConfig,
   accessToken: string
 ): Promise<void> {
   const products: ShopifyProduct[] = conv.data._products || [];
   if (products.length === 0) {
-    await sendWhatsAppMessage(conv.phone, 'ما فيه منتجات متوفرة.', accessToken, client.phone_number_id);
+    const l: string = conv.data._lang || 'ar';
+    await sendWhatsAppMessage(conv.phone, msg('ما فيه منتجات متوفرة.', 'No products are currently available.', l), accessToken, client.phone_number_id);
     return;
   }
 
   conv.data._browseMode = 'list';
 
   const pll: string = conv.data._lang || 'ar';
-  const weightRegex = /\s*\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb)\s*/i;
 
   // Group by base name — "تمر خلاص 500g" + "تمر خلاص 1kg" → one list row showing all weights
   const groups = new Map<string, { products: ShopifyProduct[]; indices: number[] }>();
   for (let i = 0; i < products.length; i++) {
     const p = products[i]!;
-    const baseName = p.title.replace(weightRegex, '').replace(/[،,]\s*$/, '').trim();
+    const baseName = p.title.replace(WEIGHT_STRIP_REGEX, '').replace(/[،,]\s*$/, '').trim();
     if (!groups.has(baseName)) groups.set(baseName, { products: [], indices: [] });
     groups.get(baseName)!.products.push(p);
     groups.get(baseName)!.indices.push(i);
   }
 
-  const listItems: { id: string; title: string }[] = [];
+  const listItems: { id: string; title: string; description?: string }[] = [];
   for (const [baseName, group] of groups) {
     // Strip trailing Arabic/Western commas from product name
     const cleanName = smartTitle(baseName.replace(/[،,]\s*$/, '').trim(), 24);
     if (group.products.length === 1) {
+      const p = group.products[0]!;
+      const minPrice = formatPrice(p.priceMin, config.currency);
+      const priceStr = p.priceMax && p.priceMax !== p.priceMin
+        ? `${minPrice} — ${formatPrice(p.priceMax, config.currency)}`
+        : minPrice;
       listItems.push({
         id: `pick_${group.indices[0]}`,
-        title: cleanName
+        title: cleanName,
+        description: priceStr
       });
     } else {
-      // Multiple weights — just show name, weight selection happens after tap
+      // Multiple weights — show count + price range so customer sees value before tap
+      const nums = group.products.map(p => parseFloat(p.priceMin));
+      const minStr = formatPrice(Math.min(...nums).toFixed(2), config.currency);
+      const maxStr = formatPrice(Math.max(...nums).toFixed(2), config.currency);
+      const priceRange = minStr === maxStr ? minStr : `${minStr} — ${maxStr}`;
+      const weightsWord = msg('أوزان', 'weights', pll);
+      const description = `${group.products.length} ${weightsWord} · ${priceRange}`;
+
       const groupId = `pick_group_${group.indices[0]}_${group.indices.slice(1).join('_')}`;
-      listItems.push({ id: groupId, title: cleanName });
+      listItems.push({ id: groupId, title: cleanName, description });
       if (!conv.data._productGroups) conv.data._productGroups = {};
       conv.data._productGroups[groupId] = group.indices;
     }
@@ -228,28 +303,31 @@ export async function showProductNames(
     return;
   }
 
-  // Group products by base name — strip weight suffix so "تمر خلاص 500g" and "تمر خلاص 1kg" become one card
-  const weightRegex = /\s*\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb)\s*/i;
+  // Group products by base name — strip weight suffix so "تمر خلاص 500g" and "تمر خلاص 1kg" become one card.
+  // Group ALL products (not just first 10), then cap the rendered group count — otherwise stores with >10
+  // products have some invisible in image mode (fgf.md #13).
   const groups = new Map<string, { products: ShopifyProduct[]; indices: number[] }>();
-  for (let i = 0; i < Math.min(products.length, 10); i++) {
+  for (let i = 0; i < products.length; i++) {
     const p = products[i]!;
-    const baseName = p.title.replace(weightRegex, '').replace(/[،,]\s*$/, '').trim();
+    const baseName = p.title.replace(WEIGHT_STRIP_REGEX, '').replace(/[،,]\s*$/, '').trim();
     if (!groups.has(baseName)) groups.set(baseName, { products: [], indices: [] });
     groups.get(baseName)!.products.push(p);
     groups.get(baseName)!.indices.push(i);
   }
 
-  const groupEntries = Array.from(groups.entries());
+  // Hard cap: WhatsApp tolerates ~12 cards in a row without feeling like spam.
+  // If more groups exist, nudge the customer to the text-based list instead.
+  const MAX_IMAGE_GROUPS = 12;
+  const allGroupEntries = Array.from(groups.entries());
+  const hasMoreGroups = allGroupEntries.length > MAX_IMAGE_GROUPS;
+  const groupEntries = allGroupEntries.slice(0, MAX_IMAGE_GROUPS);
   for (let g = 0; g < groupEntries.length; g++) {
     const [baseName, group] = groupEntries[g]!;
     const cleanBaseName = baseName.replace(/[،,]\s*$/, '').trim();
     const firstProduct = group.products[0]!;
     const imageUrl = firstProduct.imageUrl;
 
-    // Short description from Shopify (language-aware, strip HTML, max 80 chars)
-    const rawDesc = firstProduct.description
-      ? firstProduct.description.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().substring(0, 80)
-      : '';
+    const rawDesc = cleanDescription(firstProduct.description, 80);
     const descLine = rawDesc ? `\n\n${rawDesc}` : '';
 
     let bodyText: string;
@@ -272,7 +350,7 @@ export async function showProductNames(
       // Multiple separate weight products — weights as direct buttons on the card
       bodyText = `*${cleanBaseName}*${descLine}`;
       buttons = group.products.map((p, j) => {
-        const weightMatch = p.title.match(/(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i);
+        const weightMatch = p.title.match(WEIGHT_MATCH_REGEX);
         const weight = weightMatch ? weightMatch[0].trim() : p.title;
         return { id: `pick_${group.indices[j]}`, title: `${weight} — ${formatPrice(p.priceMin, config.currency)}` };
       });
@@ -285,7 +363,7 @@ export async function showProductNames(
     } else {
       // 4+ weight variants — list in body, single select button
       const weightLines = group.products.map(p => {
-        const weightMatch = p.title.match(/(\d+\s*(g|kg|ml|l|غرام|كيلو|gr|gm|oz|lb))/i);
+        const weightMatch = p.title.match(WEIGHT_MATCH_REGEX);
         const weight = weightMatch ? weightMatch[0].trim() : p.title;
         return `• ${weight} — ${formatPrice(p.priceMin, config.currency)}`;
       }).join('\n');
@@ -304,6 +382,25 @@ export async function showProductNames(
     if (g < groupEntries.length - 1) await new Promise(r => setTimeout(r, 350));
   }
 
+  // Nudge to text list if some groups weren't rendered
+  if (hasMoreGroups) {
+    const remaining = allGroupEntries.length - MAX_IMAGE_GROUPS;
+    await sendWhatsAppButtons(
+      conv.phone,
+      msg(
+        `+${remaining} منتجات إضافية. للاطلاع على القائمة الكاملة:`,
+        `+${remaining} more products. For the full list:`,
+        ibl
+      ),
+      [
+        { id: 'pick_direct', title: msg('القائمة الكاملة', 'Full List', ibl) },
+        { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ibl) }
+      ],
+      accessToken,
+      client.phone_number_id
+    );
+  }
+
   conv.data._shopifyState = 'image_browse';
 }
 
@@ -315,18 +412,20 @@ export async function showCart(
   client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
-  accessToken: string
+  accessToken: string,
+  prefix?: string
 ): Promise<void> {
   const cart: CartItem[] = conv.data._cart || [];
+  const scl: string = conv.data._lang || 'ar';
 
   if (cart.length === 0) {
-    await sendWhatsAppMessage(conv.phone, 'السلة فاضية.', accessToken, client.phone_number_id);
+    await sendWhatsAppMessage(conv.phone, msg('السلة فاضية.', 'Your cart is empty.', scl), accessToken, client.phone_number_id);
     conv.data._shopifyState = 'browse_choice';
     return;
   }
 
-  const scl: string = conv.data._lang || 'ar';
-  let cartMsg = `*${msg(scl === 'en' ? 'Shopping Cart' : 'سلة التسوق', 'Shopping Cart', scl)}:*\n━━━━━━━━━━━━━━━\n`;
+  let cartMsg = prefix ? `${prefix}\n\n` : '';
+  cartMsg += `*${msg('سلة التسوق', 'Shopping Cart', scl)}:*\n━━━━━━━━━━━━━━━\n`;
   let total = 0;
   for (let i = 0; i < cart.length; i++) {
     const item = cart[i]!;
@@ -341,6 +440,7 @@ export async function showCart(
     cartMsg += ` — ${formatPrice(lineTotal.toFixed(2), config.currency)}\n`;
   }
   cartMsg += `━━━━━━━━━━━━━━━\n*${msg('المجموع', 'Total', scl)}: ${formatPrice(total.toFixed(2), config.currency)}*`;
+  cartMsg += `\n\n💡 ${msg('اكتب *حذف* لإزالة منتج', 'Type *remove* to remove an item', scl)}`;
 
   await sendWhatsAppButtons(
     conv.phone,
@@ -348,7 +448,7 @@ export async function showCart(
     [
       { id: 'checkout_now', title: msg('اتمام الطلب ✅', 'Order Now ✅', scl) },
       { id: 'add_more', title: msg('أضف منتج', 'Add Product', scl) },
-      { id: 'remove_item', title: msg('حذف منتج', 'Remove Item', scl) }
+      { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', scl) }
     ],
     accessToken,
     client.phone_number_id
@@ -410,32 +510,6 @@ export async function showCartForRemoval(
 }
 
 // ============================================================
-// QUANTITY ASK — buttons 1, 2, 3
-// ============================================================
-
-export async function askQuantity(
-  client: ClientConfig,
-  conv: ConversationState,
-  _config: ShopifyAgentConfig,
-  accessToken: string,
-  productLabel: string
-): Promise<void> {
-  const ql: string = conv.data._lang || 'ar';
-  await sendWhatsAppButtons(
-    conv.phone,
-    `*${productLabel}*\n\n${msg('كم الكمية؟\n_(أو اكتب أي رقم)_', 'How many?\n_(or type any number)_', ql)}`,
-    [
-      { id: 'qty_1', title: '1' },
-      { id: 'qty_2', title: '2' },
-      { id: 'qty_3', title: '3' }
-    ],
-    accessToken,
-    client.phone_number_id
-  );
-  conv.data._shopifyState = 'quantity_select';
-}
-
-// ============================================================
 // SHOW TOP PRODUCTS — sends up to 3 product cards
 // ============================================================
 
@@ -460,7 +534,8 @@ export async function showTopProducts(
       ? `${price} — ${formatPrice(p.priceMax, config.currency)}`
       : price;
 
-    const bodyText = `*${p.title}*\n${priceRange}`;
+    const desc = cleanDescription(p.description, 100);
+    const bodyText = `*${p.title}*\n${priceRange}${desc ? '\n\n' + desc : ''}`;
     const buttons = [
       { id: pickId, title: msg('اختر ✅', 'Select ✅', tpl) },
       { id: 'pick_direct', title: msg('كل المنتجات', 'All Products', tpl) },
@@ -481,4 +556,30 @@ export async function showTopProducts(
 
   conv.data._browseMode = 'list';
   conv.data._shopifyState = 'catalog';
+}
+
+// ============================================================
+// SEND BACK-TO-HOME HINT
+// Middle step of the reprompt → hint → silence pattern. Sends a
+// one-button "Home 🏠" card so the customer taps instead of having
+// to type *رئيسية* / *home* themselves.
+// ============================================================
+
+export async function sendHomeHint(
+  client: ClientConfig,
+  conv: ConversationState,
+  accessToken: string
+): Promise<void> {
+  const l: string = conv.data._lang || 'ar';
+  await sendWhatsAppButtons(
+    conv.phone,
+    msg(
+      '💡 تبي ترجع للقائمة الرئيسية؟',
+      '💡 Want to go back to the main menu?',
+      l
+    ),
+    [{ id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', l) }],
+    accessToken,
+    client.phone_number_id
+  );
 }

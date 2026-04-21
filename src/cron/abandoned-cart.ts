@@ -8,6 +8,7 @@
 import { sql, getClientById } from '../services/database.js';
 import { sendWhatsAppMessage, sendWhatsAppButtons } from '../services/whatsapp.js';
 import { formatPrice } from '../services/shopify.js';
+import { wa } from '../services/shopify/types.js';
 import { maskPhone } from '../utils/buttons.js';
 import { emitEvent } from '../services/events.js';
 
@@ -103,8 +104,8 @@ export async function processAbandonedCarts(): Promise<{
         const priceText = totalStr ? ` (${formatPrice(totalStr, currency)})` : '';
 
         // Send recovery message
-        const messageAr = `مرحبا! 👋\n\nلاحظنا إن عندك طلب ما اكتمل من *${storeName}*${priceText}\n\n${cartText ? cartText + '\n\n' : ''}رابط الدفع لا يزال فعّال — تقدر تكمل الطلب من هنا:\n${checkoutUrl}`;
-        const messageEn = `Hi! 👋\n\nWe noticed you have an incomplete order from *${storeName}*${priceText}\n\n${cartText ? cartText + '\n\n' : ''}Your payment link is still active — complete your order here:\n${checkoutUrl}`;
+        const messageAr = `مرحبا! 👋\n\nلاحظنا إن عندك طلب ما اكتمل من *${wa(storeName)}*${priceText}\n\n${cartText ? cartText + '\n\n' : ''}رابط الدفع لا يزال فعّال — تقدر تكمل الطلب من هنا:\n${checkoutUrl}`;
+        const messageEn = `Hi! 👋\n\nWe noticed you have an incomplete order from *${wa(storeName)}*${priceText}\n\n${cartText ? cartText + '\n\n' : ''}Your payment link is still active — complete your order here:\n${checkoutUrl}`;
         const message = lang === 'en' ? messageEn : messageAr;
 
         await sendWhatsAppMessage(cart.phone, message, client.access_token, client.phone_number_id);

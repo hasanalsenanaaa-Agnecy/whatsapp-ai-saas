@@ -43,9 +43,22 @@ export interface ShopifyAdminOrder {
   }[];
 }
 
-export const AI_QUESTION_BUDGET = 2;
+// Budget per 4h session. Counter lives on conv.data._aiAnswerCount and resets
+// when the conversation timeout fires (see conversation.ts checkShouldReset).
+// Target: 6 × 1,500 conversations/mo ≈ 9,000 AI messages, well under the 25k cap.
+export const AI_QUESTION_BUDGET = 6;
 
 /** Bilingual helper — returns Arabic or English based on lang */
 export function msg(ar: string, en: string, lang?: string): string {
   return lang === 'en' ? en : ar;
+}
+
+/**
+ * Strip WhatsApp markdown characters (* _ ~ `) from user-supplied strings
+ * before wrapping them in bold/italic/etc. Without this, a store name like
+ * "ARAB*" embedded inside `*${storeName}*` breaks formatting on the rest of
+ * the message. Safe to call on any text; preserves all other characters.
+ */
+export function wa(s: string | undefined): string {
+  return (s || '').replace(/[*_~`]/g, '');
 }

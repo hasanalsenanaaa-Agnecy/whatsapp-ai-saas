@@ -20,6 +20,7 @@ const RETENTION_MONTHS = 24;
 interface RetentionResult {
   eventsAnonymized: number;
   conversationsAnonymized: number;
+  deletionRequestsProcessed: number;
   leadsDeleted: number;
   appointmentsDeleted: number;
   errors: string[];
@@ -33,6 +34,7 @@ export async function processDataRetention(): Promise<RetentionResult> {
   const result: RetentionResult = {
     eventsAnonymized: 0,
     conversationsAnonymized: 0,
+    deletionRequestsProcessed: 0,
     leadsDeleted: 0,
     appointmentsDeleted: 0,
     errors: [],
@@ -60,6 +62,37 @@ export async function processDataRetention(): Promise<RetentionResult> {
   } catch (error) {
     result.errors.push(`events: ${error}`);
     console.error('🗑️ Retention error (events):', error);
+  }
+
+  // 1b. EXPLICIT DELETION REQUESTS — customer asked to be forgotten via
+  //     WhatsApp. PDPL requires honoring within 30 days; we process on the
+  //     next cron run. Anonymize conversation + matching leads/appointments.
+  try {
+    const requested = await sql`
+      SELECT client_id, phone
+      FROM conversations
+      WHERE data->>'_deletionRequestedAt' IS NOT NULL
+        AND phone NOT LIKE 'anon-%'
+    `;
+    for (const row of requested) {
+      const clientId = (row as any).client_id;
+      const phone = (row as any).phone;
+      await sql`
+        UPDATE conversations
+        SET
+          phone = 'anon-' || LEFT(MD5(phone), 8),
+          messages = '[]'::jsonb,
+          data = jsonb_build_object('_anonymizedAt', ${new Date().toISOString()}, '_reason', 'customer_request')
+        WHERE client_id = ${clientId} AND phone = ${phone}
+      `;
+      await sql`UPDATE events SET phone = 'anon' WHERE client_id = ${clientId} AND phone = ${phone}`;
+      await sql`DELETE FROM leads WHERE client_id = ${clientId} AND phone = ${phone}`;
+      await sql`DELETE FROM appointments WHERE client_id = ${clientId} AND phone = ${phone}`;
+      result.deletionRequestsProcessed++;
+    }
+  } catch (error) {
+    result.errors.push(`deletion_requests: ${error}`);
+    console.error('🗑️ Retention error (deletion requests):', error);
   }
 
   // 2. CONVERSATIONS — anonymize phone + strip PII from data blob
@@ -114,7 +147,7 @@ export async function processDataRetention(): Promise<RetentionResult> {
     console.error('🗑️ Retention error (appointments):', error);
   }
 
-  console.log(`🗑️ Retention complete: ${result.eventsAnonymized} events anonymized, ${result.conversationsAnonymized} conversations anonymized, ${result.leadsDeleted} leads deleted, ${result.appointmentsDeleted} appointments deleted`);
+  console.log(`🗑️ Retention complete: ${result.eventsAnonymized} events anonymized, ${result.conversationsAnonymized} conversations anonymized, ${result.deletionRequestsProcessed} deletion requests processed, ${result.leadsDeleted} leads deleted, ${result.appointmentsDeleted} appointments deleted`);
 
   return result;
 }
