@@ -11,6 +11,7 @@
     "client": "tsx src/scripts/client-cli.ts",
     "features": "tsx src/scripts/features-cli.ts",
     "export-client": "tsx src/scripts/export-client.ts",
+    "sim": "SIM_MODE=1 tsx src/scripts/sim.ts",
     "postinstall": "npm run build",
     "db:backup": "tsx src/tools/db-maintenance.ts backup",
     "db:restore": "tsx src/tools/db-maintenance.ts restore",

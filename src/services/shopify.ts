@@ -34,8 +34,12 @@ export interface ShopifyCheckout {
 // ============================================================
 
 // sortKey defaults to BEST_SELLING so the order reflects real Shopify sales data
+// @inContext(language: $language) tells Shopify to return translated
+// titles/descriptions from the Translate & Adapt app. Without it,
+// Accept-Language alone is unreliable — you get the default shop
+// language even for products that DO have Arabic translations.
 const PRODUCTS_QUERY = `
-  query getProducts($first: Int!, $sortKey: ProductSortKeys, $reverse: Boolean) {
+  query getProducts($first: Int!, $sortKey: ProductSortKeys, $reverse: Boolean, $language: LanguageCode!) @inContext(language: $language) {
     products(first: $first, sortKey: $sortKey, reverse: $reverse) {
       edges {
         node {
@@ -71,7 +75,7 @@ const PRODUCTS_QUERY = `
 `;
 
 const SEARCH_PRODUCTS_QUERY = `
-  query searchProducts($query: String!, $first: Int!) {
+  query searchProducts($query: String!, $first: Int!, $language: LanguageCode!) @inContext(language: $language) {
     products(first: $first, query: $query) {
       edges {
         node {
@@ -107,7 +111,7 @@ const SEARCH_PRODUCTS_QUERY = `
 `;
 
 const PRODUCT_BY_ID_QUERY = `
-  query getProduct($id: ID!) {
+  query getProduct($id: ID!, $language: LanguageCode!) @inContext(language: $language) {
     product(id: $id) {
       id
       title
@@ -308,7 +312,8 @@ export async function fetchProducts(
     const data = await shopifyGraphQL(shopifyDomain, storefrontToken, PRODUCTS_QUERY, {
       first: limit,
       sortKey: 'BEST_SELLING',
-      reverse: false
+      reverse: false,
+      language: lang === 'en' ? 'EN' : 'AR'
     }, lang) as {
       products: { edges: { node: Record<string, unknown> }[] };
     };
@@ -326,10 +331,15 @@ export async function searchProducts(
   shopifyDomain: string,
   storefrontToken: string | undefined,
   query: string,
-  limit = 10
+  limit = 10,
+  lang = 'ar'
 ): Promise<ShopifyProduct[]> {
   try {
-    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, SEARCH_PRODUCTS_QUERY, { query, first: limit }) as {
+    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, SEARCH_PRODUCTS_QUERY, {
+      query,
+      first: limit,
+      language: lang === 'en' ? 'EN' : 'AR'
+    }, lang) as {
       products: { edges: { node: Record<string, unknown> }[] };
     };
     return data.products.edges.map(e => parseProduct(e.node));
@@ -345,10 +355,14 @@ export async function searchProducts(
 export async function getProductById(
   shopifyDomain: string,
   storefrontToken: string | undefined,
-  productId: string
+  productId: string,
+  lang = 'ar'
 ): Promise<ShopifyProduct | null> {
   try {
-    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, PRODUCT_BY_ID_QUERY, { id: productId }) as {
+    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, PRODUCT_BY_ID_QUERY, {
+      id: productId,
+      language: lang === 'en' ? 'EN' : 'AR'
+    }, lang) as {
       product: Record<string, unknown> | null;
     };
     if (!data.product) return null;

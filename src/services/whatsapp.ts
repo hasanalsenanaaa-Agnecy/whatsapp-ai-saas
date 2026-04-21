@@ -7,6 +7,35 @@ const MAX_RETRIES = 3;
 interface ButtonOption { id: string; title: string; description?: string; }
 
 // ============================================================
+// SIM MODE — captures outbound messages to an in-memory buffer
+// instead of hitting Meta, so the local chat simulator (see
+// src/scripts/sim.ts) can display bot replies in the terminal.
+// Enable by setting env SIM_MODE=1.
+// ============================================================
+
+export interface SimMessage {
+  type: 'text' | 'buttons' | 'image' | 'buttons_image' | 'list';
+  to: string;
+  body: string;
+  buttons?: ButtonOption[];
+  imageUrl?: string;
+}
+
+const SIM_ENABLED = process.env.SIM_MODE === '1';
+const simBuffer: SimMessage[] = [];
+
+function simCapture(msg: SimMessage): boolean {
+  simBuffer.push(msg);
+  return true;
+}
+
+export function drainSimMessages(): SimMessage[] {
+  const out = simBuffer.slice();
+  simBuffer.length = 0;
+  return out;
+}
+
+// ============================================================
 // FETCH WITH RETRY + TIMEOUT
 // Retries on 429 (rate limit) and 5xx (transient server errors).
 // Does NOT retry on 4xx client errors (bad request, auth failure).
@@ -54,6 +83,7 @@ async function fetchWithRetry(url: string, options: RequestInit): Promise<Respon
 // ============================================================
 
 export async function sendWhatsAppMessage(to: string, message: string, accessToken: string, phoneNumberId: string): Promise<boolean> {
+  if (SIM_ENABLED) return simCapture({ type: 'text', to, body: message });
   if (!to || !message || !accessToken || !phoneNumberId) {
     console.error('❌ Missing params');
     return false;
@@ -85,6 +115,7 @@ export async function sendWhatsAppMessage(to: string, message: string, accessTok
 }
 
 export async function sendWhatsAppButtons(to: string, bodyText: string, buttons: ButtonOption[], accessToken: string, phoneNumberId: string): Promise<boolean> {
+  if (SIM_ENABLED) return simCapture({ type: 'buttons', to, body: bodyText, buttons });
   if (!to || !bodyText || !buttons?.length || !accessToken || !phoneNumberId) return false;
 
   const limitedButtons = buttons.slice(0, 3);
@@ -123,6 +154,7 @@ export async function sendWhatsAppButtons(to: string, bodyText: string, buttons:
 }
 
 export async function sendWhatsAppImage(to: string, imageUrl: string, caption: string, accessToken: string, phoneNumberId: string): Promise<boolean> {
+  if (SIM_ENABLED) return simCapture({ type: 'image', to, body: caption, imageUrl });
   if (!to || !imageUrl || !accessToken || !phoneNumberId) return false;
 
   try {
@@ -150,6 +182,7 @@ export async function sendWhatsAppImage(to: string, imageUrl: string, caption: s
 }
 
 export async function sendWhatsAppButtonsWithImage(to: string, imageUrl: string, bodyText: string, buttons: ButtonOption[], accessToken: string, phoneNumberId: string): Promise<boolean> {
+  if (SIM_ENABLED) return simCapture({ type: 'buttons_image', to, body: bodyText, buttons, imageUrl });
   if (!to || !bodyText || !buttons?.length || !accessToken || !phoneNumberId) return false;
 
   const limitedButtons = buttons.slice(0, 3);
@@ -194,6 +227,7 @@ export async function sendWhatsAppButtonsWithImage(to: string, imageUrl: string,
 }
 
 export async function sendWhatsAppList(to: string, bodyText: string, buttonText: string, options: ButtonOption[], accessToken: string, phoneNumberId: string): Promise<boolean> {
+  if (SIM_ENABLED) return simCapture({ type: 'list', to, body: bodyText, buttons: options });
   if (!to || !bodyText || !options?.length || !accessToken || !phoneNumberId) return false;
 
   const limitedOptions = options.slice(0, 10);
