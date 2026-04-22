@@ -26,7 +26,7 @@ const FAKE_PHONE = process.env.SIM_PHONE || '9665XXXXXXXX_TEST';
 
 function formatReply(msg: SimMessage, index: number): string {
   const lines: string[] = [];
-  const prefix = index === 0 ? '🤖 ' : '   ';
+  const prefix = index === 0 ? 'bot> ' : '     ';
 
   if (msg.imageUrl) {
     lines.push(`${prefix}[🖼️  image: ${msg.imageUrl}]`);

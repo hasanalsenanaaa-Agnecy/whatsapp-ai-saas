@@ -111,7 +111,7 @@ export function isQuestionMessage(message: string): boolean {
 // كيلو, جرام, رطل, أونصة/اونصة/اونسه, مل, لتر). Extend here only.
 // ============================================================
 
-const WEIGHT_UNITS = 'g|kg|ml|l|غرام|جرام|كيلو|رطل|أونصة|اونصة|اونسه|مل|لتر|gr|gm|oz|lb';
+const WEIGHT_UNITS = 'g|kg|ml|l|غرام|جرام|كيلو|كغ|غ|رطل|أونصة|اونصة|اونسه|مل|لتر|gr|gm|oz|lb';
 
 // Strip a trailing weight phrase from a product title ("تمر خلاص 500g" → "تمر خلاص")
 export const WEIGHT_STRIP_REGEX = new RegExp(`\\s*\\d+\\s*(${WEIGHT_UNITS})\\s*`, 'i');
@@ -399,6 +399,7 @@ export function resetCurrentOrder(conv: ConversationState): void {
   // Clear customer service fields
   delete conv.data._csAcknowledged;
   delete conv.data._csStartedAt;
+  delete conv.data._csRepeatAcked;
   // Preserve: _lang, _products, _orderHistory, name, _nameAsked
 }
 
@@ -480,6 +481,59 @@ export async function getOrderByNumber(
     return json.orders?.[0] || null;
   } catch {
     return null;
+  }
+}
+
+// Look up a customer's recent orders by their WhatsApp phone number. Saves
+// the customer from typing #1042 when we already know who they are
+// (Con-flow L17). Returns the 5 most recent orders, newest first — or an
+// empty array on any failure (no match, no token, API error).
+//
+// Shopify stores phones in mixed formats. We try several candidates:
+//   - raw WhatsApp digits         "966501234567"
+//   - with + prefix               "+966501234567"
+//   - Saudi local (0 + number)    "0501234567"
+// and stop at the first hit.
+export async function getOrdersByPhone(
+  domain: string,
+  adminToken: string,
+  whatsappPhone: string
+): Promise<ShopifyAdminOrder[]> {
+  try {
+    const digits = whatsappPhone.replace(/\D/g, '');
+    if (digits.length < 7) return [];
+
+    const candidates: string[] = [digits, `+${digits}`];
+    if (digits.startsWith('966') && digits.length >= 10) {
+      candidates.push('0' + digits.slice(3));
+    }
+
+    let customerId: number | undefined;
+    for (const phone of candidates) {
+      const query = encodeURIComponent(`phone:${phone}`);
+      const url = `https://${domain}/admin/api/2026-04/customers/search.json?query=${query}&limit=1`;
+      const res = await fetch(url, {
+        headers: { 'X-Shopify-Access-Token': adminToken, 'Content-Type': 'application/json' }
+      });
+      if (!res.ok) continue;
+      const json = await res.json() as { customers?: Array<{ id: number }> };
+      if (json.customers?.[0]) {
+        customerId = json.customers[0].id;
+        break;
+      }
+    }
+    if (!customerId) return [];
+
+    // Shopify returns newest-first by default.
+    const ordersUrl = `https://${domain}/admin/api/2026-04/orders.json?customer_id=${customerId}&status=any&limit=5`;
+    const ordersRes = await fetch(ordersUrl, {
+      headers: { 'X-Shopify-Access-Token': adminToken, 'Content-Type': 'application/json' }
+    });
+    if (!ordersRes.ok) return [];
+    const ordersJson = await ordersRes.json() as { orders?: ShopifyAdminOrder[] };
+    return ordersJson.orders || [];
+  } catch {
+    return [];
   }
 }
 

@@ -190,15 +190,29 @@ export async function tryAIAnswer(
     return true;
   }
 
-  // First answer only — soft CTA to browse (no specific product to link to).
+  // Every answer gets a CTA so the customer always has a one-tap path
+  // forward — otherwise multi-product answers ("الخلاص والسكري كلاهما…")
+  // leave them stranded in free-text chat. First answer: full browse
+  // picker. Subsequent answers: compact list + home.
+  const ail: string = conv.data._lang || 'ar';
   if (count === 0) {
-    const ail: string = conv.data._lang || 'ar';
     await sendWhatsAppButtons(
       conv.phone,
       msg('تبي تتصفح المنتجات؟', 'Would you like to browse our products?', ail),
       [
         { id: 'pick_direct', title: msg('قائمة المنتجات', 'Product List', ail) },
         { id: 'show_images', title: msg('شوف الصور', 'View Images', ail) },
+        { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ail) }
+      ],
+      accessToken,
+      client.phone_number_id
+    );
+  } else {
+    await sendWhatsAppButtons(
+      conv.phone,
+      msg('تحب تشوف المنتجات؟', 'Want to see the products?', ail),
+      [
+        { id: 'pick_direct', title: msg('قائمة المنتجات', 'Product List', ail) },
         { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', ail) }
       ],
       accessToken,

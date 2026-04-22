@@ -211,13 +211,13 @@ export async function showProductView(
 }
 
 // ============================================================
-// PRODUCT LIST (LIST MODE) — name + price
+// PRODUCT LIST (LIST MODE) — name only (Con-flow L31)
 // ============================================================
 
 export async function showProductList(
   client: ClientConfig,
   conv: ConversationState,
-  config: ShopifyAgentConfig,
+  _config: ShopifyAgentConfig,
   accessToken: string
 ): Promise<void> {
   const products: ShopifyProduct[] = conv.data._products || [];
@@ -241,32 +241,21 @@ export async function showProductList(
     groups.get(baseName)!.indices.push(i);
   }
 
+  // Name-only list per Con-flow L31: "only minimal name to be friendly
+  // with whatsapp UX, no weight, no price". Weight/price are shown on the
+  // product view after the customer taps — no need to front-load them.
   const listItems: { id: string; title: string; description?: string }[] = [];
   for (const [baseName, group] of groups) {
     // Strip trailing Arabic/Western commas from product name
     const cleanName = smartTitle(baseName.replace(/[،,]\s*$/, '').trim(), 24);
     if (group.products.length === 1) {
-      const p = group.products[0]!;
-      const minPrice = formatPrice(p.priceMin, config.currency);
-      const priceStr = p.priceMax && p.priceMax !== p.priceMin
-        ? `${minPrice} — ${formatPrice(p.priceMax, config.currency)}`
-        : minPrice;
       listItems.push({
         id: `pick_${group.indices[0]}`,
-        title: cleanName,
-        description: priceStr
+        title: cleanName
       });
     } else {
-      // Multiple weights — show count + price range so customer sees value before tap
-      const nums = group.products.map(p => parseFloat(p.priceMin));
-      const minStr = formatPrice(Math.min(...nums).toFixed(2), config.currency);
-      const maxStr = formatPrice(Math.max(...nums).toFixed(2), config.currency);
-      const priceRange = minStr === maxStr ? minStr : `${minStr} — ${maxStr}`;
-      const weightsWord = msg('أوزان', 'weights', pll);
-      const description = `${group.products.length} ${weightsWord} · ${priceRange}`;
-
       const groupId = `pick_group_${group.indices[0]}_${group.indices.slice(1).join('_')}`;
-      listItems.push({ id: groupId, title: cleanName, description });
+      listItems.push({ id: groupId, title: cleanName });
       if (!conv.data._productGroups) conv.data._productGroups = {};
       conv.data._productGroups[groupId] = group.indices;
     }
@@ -439,16 +428,19 @@ export async function showCart(
     if (qty > 1) cartMsg += ` x${qty}`;
     cartMsg += ` — ${formatPrice(lineTotal.toFixed(2), config.currency)}\n`;
   }
-  cartMsg += `━━━━━━━━━━━━━━━\n*${msg('المجموع', 'Total', scl)}: ${formatPrice(total.toFixed(2), config.currency)}*`;
-  cartMsg += `\n\n💡 ${msg('اكتب *حذف* لإزالة منتج', 'Type *remove* to remove an item', scl)}`;
+  cartMsg += `━━━━━━━━━━━━━━━`;
+  void total;
 
+  // When the cart has items, expose *Remove* alongside checkout/add.
+  // Home is still reachable by typing "home" / "الرئيسية" — we trade one
+  // button slot for the more-valuable cart action (Con-flow L37-39).
   await sendWhatsAppButtons(
     conv.phone,
     cartMsg,
     [
       { id: 'checkout_now', title: msg('اتمام الطلب ✅', 'Order Now ✅', scl) },
       { id: 'add_more', title: msg('أضف منتج', 'Add Product', scl) },
-      { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', scl) }
+      { id: 'cart_remove', title: msg('حذف منتج 🗑️', 'Remove Item 🗑️', scl) }
     ],
     accessToken,
     client.phone_number_id

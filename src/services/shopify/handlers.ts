@@ -36,6 +36,7 @@ import {
   markReprompted,
   markHinted,
   getOrderByNumber,
+  getOrdersByPhone,
   formatOrderStatus,
   expireStaleCart,
   WEIGHT_STRIP_REGEX,
@@ -120,9 +121,18 @@ export async function handleShopifyAgent(
   const trimmed = message.trim();
   const lower = trimmed.toLowerCase();
 
-  // If consent was declined, re-ask on next message
+  // If consent was declined, stay silent for 1 hour before re-engaging.
+  // PDPL posture: customer said no — we respect that. Any messages within
+  // the quiet window get no reply; after 1h we treat the next message as
+  // a fresh start and re-ask consent.
   if (conv.data._consentDeclined) {
+    const declinedAt = conv.data._consentDeclinedAt ? Date.parse(conv.data._consentDeclinedAt) : 0;
+    const oneHourMs = 60 * 60 * 1000;
+    if (declinedAt && Date.now() - declinedAt < oneHourMs) {
+      return; // silent window
+    }
     delete conv.data._consentDeclined;
+    delete conv.data._consentDeclinedAt;
     delete conv.data._consentAsked;
     conv.data._shopifyState = 'welcome';
     await handleWelcome(client, conv, config, message, accessToken);
@@ -198,8 +208,19 @@ export async function handleShopifyAgent(
     delete conv.data._osLastForwardedAt;
     delete conv.data._osEmail;
     delete conv.data._osEmailAsked;
+    delete conv.data._osFollowupAcked;
+    delete conv.data._osNotifiedOwner;
+    delete conv.data._osPhoneLookupTried;
+    delete conv.data._osPhoneOrderNums;
     delete conv.data._csAcknowledged;
     delete conv.data._csStartedAt;
+    delete conv.data._csRepeatAcked;
+    delete conv.data._csLastNotifiedAt;
+    // Home = fresh intent branch → reset owner-ping guards so a new CS or
+    // status request from the same customer re-pages the owner.
+    delete conv.data._globalContactNotified;
+    delete conv.data._orderCompleteNotified;
+    delete conv.data._paymentHelpNotified;
     // Home = fresh start for AI budget too (fgf.md #39).
     delete conv.data._aiAnswerCount;
     delete conv.data._aiExhaustedNotified;
@@ -220,9 +241,11 @@ export async function handleShopifyAgent(
   const wantsStatus = trimmed === 'intent_status' || lower === 'حالة الطلب';
   const wantsCs = trimmed === 'intent_cs' || lower === 'خدمة العملاء' || lower === 'customer service';
   const wantsOrder = trimmed === 'intent_order';
-  if ((wantsStatus && current !== 'order_status')
+  if (current && (
+    (wantsStatus && current !== 'order_status')
     || (wantsCs && current !== 'customer_service')
-    || (wantsOrder && current !== 'new_order')) {
+    || (wantsOrder && current !== 'new_order')
+  )) {
     delete conv.data._intent;
     delete conv.data._intentAsked;
     delete conv.data._osOrderNum;
@@ -231,8 +254,18 @@ export async function handleShopifyAgent(
     delete conv.data._osLastForwardedAt;
     delete conv.data._osEmail;
     delete conv.data._osEmailAsked;
+    delete conv.data._osFollowupAcked;
+    delete conv.data._osNotifiedOwner;
+    delete conv.data._osPhoneLookupTried;
+    delete conv.data._osPhoneOrderNums;
     delete conv.data._csAcknowledged;
     delete conv.data._csStartedAt;
+    delete conv.data._csRepeatAcked;
+    delete conv.data._csLastNotifiedAt;
+    // Reset owner-ping guards so the new intent can re-page as first contact.
+    delete conv.data._globalContactNotified;
+    delete conv.data._orderCompleteNotified;
+    delete conv.data._paymentHelpNotified;
     // Fresh intent branch → give the customer a fresh AI budget (fgf.md #39).
     // Otherwise a customer who used all 6 AI answers in CS gets silence the
     // moment they try a new order.
@@ -269,11 +302,16 @@ export async function handleShopifyAgent(
       await showCart(client, conv, config, accessToken);
       return;
     }
-    // Global contact us — works from any state
+    // Global contact us — works from any state. Ping owner once per
+    // session: repeat taps should re-acknowledge the customer but not
+    // re-page the owner (anti-spam rule).
     if (lower === 'contact_us_global' || lower === 'contact_us') {
       const gcl: string = conv.data._lang || 'ar';
       await sendWhatsAppMessage(conv.phone, msg('سيتواصل معك فريقنا قريباً.', 'Our team will contact you shortly.', gcl), accessToken, client.phone_number_id);
-      await notifyOwner(client, conv, config, 'help', accessToken);
+      if (!conv.data._globalContactNotified) {
+        conv.data._globalContactNotified = true;
+        await notifyOwner(client, conv, config, 'help', accessToken);
+      }
       return;
     }
   }
@@ -421,6 +459,7 @@ async function handleWelcome(
         client.phone_number_id
       );
       conv.data._consentDeclined = true;
+      conv.data._consentDeclinedAt = new Date().toISOString();
       return;
     } else {
       // Didn't understand — re-ask
@@ -452,9 +491,17 @@ async function handleWelcome(
           l
         )
       : '';
+    // Warm greeting on the very first intent-menu show, so a bare "hi" /
+    // "🌴" / emoji opener doesn't feel like the bot jumped straight to a menu.
+    // Subsequent re-prompts (customer typed something we didn't recognize)
+    // skip the greeting — it would feel redundant.
+    const greetName = conv.data.name ? (l === 'en' ? ` ${conv.data.name}` : ` ${conv.data.name}`) : '';
+    const warmGreeting = !conv.data._intentAsked
+      ? msg(`أهلاً${greetName} 🌴\n\n`, `Hello${greetName} 🌴\n\n`, l)
+      : '';
     const intentPrompt = msg(
-      `كيف نقدر نساعدك؟ 😊${cartHint}\n\n💡 اكتب *رئيسية* في أي وقت للرجوع لهذه القائمة`,
-      `How can we help you? 😊${cartHint}\n\n💡 Type *home* anytime to return to this menu`,
+      `${warmGreeting}كيف نقدر نساعدك؟ 😊${cartHint}\n\n💡 اكتب *رئيسية* في أي وقت للرجوع لهذه القائمة`,
+      `${warmGreeting}How can we help you? 😊${cartHint}\n\n💡 Type *home* anytime to return to this menu`,
       l
     );
     const intentButtons = [
@@ -513,20 +560,31 @@ async function handleWelcome(
       await handleCustomerService(client, conv, config, message, accessToken);
       return;
     } else {
-      // AI-1: at the intent menu, give Claude a chance to answer product questions
-      // ("وش عندكم؟" / "do you have ajwa?") before falling back to the menu reprompt.
-      // Products usually aren't loaded yet at this stage — fetch them for the AI's catalog.
-      if (isQuestionMessage(message)) {
-        if (!conv.data._products || conv.data._products.length === 0) {
-          const loaded = await fetchProductsCached(config.domain, config.storefrontToken, conv.data._lang || 'ar');
-          if (loaded.length > 0) {
-            conv.data._products = loaded.map(p => ({
-              id: p.id, title: p.title, description: p.description,
-              priceMin: p.priceMin, priceMax: p.priceMax, imageUrl: p.imageUrl,
-              variants: p.variants, tags: p.tags, compareAtPriceMin: p.compareAtPriceMin
-            }));
-          }
+      // Load products so we can match "ابغى السكري" against the catalog and
+      // feed AI with context for questions. Both paths need them.
+      if (!conv.data._products || conv.data._products.length === 0) {
+        const loaded = await fetchProductsCached(config.domain, config.storefrontToken, conv.data._lang || 'ar');
+        if (loaded.length > 0) {
+          conv.data._products = loaded.map(p => ({
+            id: p.id, title: p.title, description: p.description,
+            priceMin: p.priceMin, priceMax: p.priceMax, imageUrl: p.imageUrl,
+            variants: p.variants, tags: p.tags, compareAtPriceMin: p.compareAtPriceMin
+          }));
         }
+      }
+      // Declarative buying intent ("ابغى السكري" / "I want the sukkari") —
+      // match against product names and route straight to the new-order flow.
+      const directMatch = matchProduct(message, conv.data._products || []);
+      if (directMatch) {
+        conv.data._intent = 'new_order';
+        conv.data._selectedProduct = directMatch;
+        conv.data._browseMode = 'list';
+        conv.data._shopifyState = 'variant_select';
+        await showVariantOrProductView(client, conv, config, accessToken, directMatch);
+        return;
+      }
+      // Question form — let Claude answer before falling back to the menu reprompt.
+      if (isQuestionMessage(message)) {
         const aiHandled = await tryAIAnswer(client, conv, config, message, accessToken, notifyOwner);
         if (aiHandled) return;
       }
@@ -1133,25 +1191,10 @@ async function handleCart(
   if (lower === 'add_more' || lower === 'تسوق' || lower === 'تسوق أكثر'
     || lower.includes('أضف منتج') || lower.includes('ضيف منتج') || lower.includes('زيد منتج')
     || lower.includes('أضف أكثر') || lower.includes('تسوق أكثر')) {
-    if (conv.data._browseMode === 'image') {
-      await showProductNames(client, conv, config, accessToken);
-    } else if (conv.data._browseMode === 'list') {
-      await showProductList(client, conv, config, accessToken);
-    } else {
-      const aml: string = conv.data._lang || 'ar';
-      await sendWhatsAppButtons(
-        conv.phone,
-        msg(`كيف تبي تتصفح *${wa(config.storeName)}*؟`, `How would you like to browse *${wa(config.storeName)}*?`, aml),
-        [
-          { id: 'show_images', title: msg('شوف الصور', 'View Images', aml) },
-          { id: 'pick_direct', title: msg('قائمة المنتجات', 'Product List', aml) },
-          { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', aml) }
-        ],
-        accessToken,
-        client.phone_number_id
-      );
-      conv.data._shopifyState = 'browse_choice';
-    }
+    // Always use the compact product list for add-more — re-dumping the
+    // full image gallery is spammy when the customer already picked once.
+    await showProductList(client, conv, config, accessToken);
+    conv.data._shopifyState = 'catalog';
     return;
   }
 
@@ -1297,22 +1340,25 @@ async function handlePaymentConfirmation(
     return;
   }
 
-  // Owner-notify cooldown: on the first help/follow-up, notify immediately.
-  // On subsequent follow-ups, only re-notify if 5+ minutes have passed since
-  // the last notification — so a customer sending 5 rapid messages doesn't
-  // silently disappear from the owner's view (fgf.md #22), but repeated
-  // taps within the same minute don't spam the owner either.
-  const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
-  const lastNotifiedAt = conv.data._paymentHelpLastNotifiedAt as number | undefined;
-  const shouldNotifyOwner = !lastNotifiedAt || (Date.now() - lastNotifiedAt) >= NOTIFY_COOLDOWN_MS;
+  // Owner-notify: ping once per payment session. First help/follow-up pages
+  // the owner; subsequent messages re-acknowledge the customer but never
+  // re-page (anti-spam rule — Con-flow L43).
+  const shouldNotifyOwner = !conv.data._paymentHelpNotified;
 
   // Help button or help words → escalate to owner
   if (lower === 'paid_help' || lower.includes('مساعدة') || lower.includes('موظف') || lower.includes('help')) {
     await sendWhatsAppMessage(conv.phone, msg('سيتواصل معك فريقنا قريباً.', 'Our team will contact you shortly.', l), accessToken, client.phone_number_id);
     if (shouldNotifyOwner) {
-      conv.data._paymentHelpLastNotifiedAt = Date.now();
+      conv.data._paymentHelpNotified = true;
       await notifyOwner(client, conv, config, 'help', accessToken);
     }
+    return;
+  }
+
+  // Gratitude — ack warmly, don't treat as a help request.
+  if ((lower.includes('شكر') || lower.includes('مشكور') || lower.includes('thanks') || lower.includes('thank you') || lower === '🙏') && !conv.data._gratitudeAcked) {
+    conv.data._gratitudeAcked = true;
+    await sendWhatsAppMessage(conv.phone, msg('العفو! 😊', 'You\'re welcome! 😊', l), accessToken, client.phone_number_id);
     return;
   }
 
@@ -1324,9 +1370,9 @@ async function handlePaymentConfirmation(
     if (aiHandled) return;
   }
 
-  // Any other message → show help/home options, notify owner (with cooldown)
+  // Any other message → show help/home options, notify owner (once only)
   if (shouldNotifyOwner) {
-    conv.data._paymentHelpLastNotifiedAt = Date.now();
+    conv.data._paymentHelpNotified = true;
     await notifyOwner(client, conv, config, 'help', accessToken);
   }
 
@@ -1368,21 +1414,27 @@ async function handleOrderComplete(
     return;
   }
 
-  // Track order → scripted once + notify owner + silence
+  // Track order → scripted once + notify owner (first time only) + silence
   if (lower === 'track_order' || lower.includes('تتبع') || lower.includes('وين طلبي') || lower.includes('حالة الطلب')) {
     const l: string = conv.data._lang || 'ar';
     await sendWhatsAppMessage(conv.phone, msg('سيتواصل معك فريقنا قريباً بتحديث طلبك.', 'Our team will reach out shortly with an update on your order.', l), accessToken, client.phone_number_id);
-    await notifyOwner(client, conv, config, 'urgent', accessToken);
+    if (!conv.data._orderCompleteNotified) {
+      conv.data._orderCompleteNotified = true;
+      await notifyOwner(client, conv, config, 'urgent', accessToken);
+    }
     markReprompted(conv);
     return;
   }
 
-  // Contact us / any complaint / cancel → scripted once + notify owner + silence
+  // Contact us / any complaint / cancel → scripted once + notify owner (first time only) + silence
   if (lower === 'contact_us' || lower.includes('تواصل') || lower.includes('مساعدة') || lower.includes('موظف')
     || lower.includes('استرجاع') || lower.includes('الغ') || lower.includes('مشكلة')
     || lower.includes('تأخر') || lower.includes('ما وصل')) {
     await sendWhatsAppMessage(conv.phone, msg('سيتواصل معك فريقنا قريباً.', 'Our team will contact you shortly.', conv.data._lang || 'ar'), accessToken, client.phone_number_id);
-    await notifyOwner(client, conv, config, 'urgent', accessToken);
+    if (!conv.data._orderCompleteNotified) {
+      conv.data._orderCompleteNotified = true;
+      await notifyOwner(client, conv, config, 'urgent', accessToken);
+    }
     markReprompted(conv);
     return;
   }
@@ -1434,12 +1486,81 @@ async function handleOrderStatus(
 
   // "Track another" shortcut — clear saved order number so the flow
   // re-asks without the customer having to go home + re-enter the
-  // order-status intent (fgf.md #28).
+  // order-status intent (fgf.md #28). We also clear the phone-lookup flag
+  // so "track another" re-offers the saved-orders picker.
   if (lowerMsg === 'track_another' || lowerMsg.includes('طلب ثاني') || lowerMsg.includes('another order') || lowerMsg.includes('طلب اخر') || lowerMsg.includes('طلب آخر')) {
     delete conv.data._osOrderNum;
     conv.data._osOrderNumAsked = false;
     delete conv.data._osContextForwarded;
     delete conv.data._osLastForwardedAt;
+    delete conv.data._osPhoneLookupTried;
+    delete conv.data._osPhoneOrderNums;
+  }
+
+  // "Not mine" (customer rejected the picker) — fall through to manual entry.
+  if (lowerMsg === 'os_not_mine' || lowerMsg.includes('مو طلبي') || lowerMsg.includes('not mine')) {
+    delete conv.data._osPhoneOrderNums;
+  }
+
+  // Customer picked one of the matched orders from the phone-lookup picker.
+  // Button id is `os_pick_<order_number>`; set _osOrderNum and flow through
+  // to the normal Admin lookup below so we get the full formatted status.
+  if (lowerMsg.startsWith('os_pick_')) {
+    const picked = lowerMsg.slice('os_pick_'.length);
+    if (/^\d+$/.test(picked)) {
+      conv.data._osOrderNum = picked;
+    }
+  }
+
+  // STEP 0: Try phone lookup once per session (Con-flow L17). If we find
+  // exactly one order, show it directly. If we find several, offer a
+  // picker. If none (or no admin token), fall through to asking for the
+  // order number. We only try this once to avoid hammering the API when
+  // the customer retries within the same session.
+  const adminTokenEarly = client.settings?.shopify_admin_token || client.settings?.shopify?.adminToken;
+  if (!conv.data._osOrderNum && !conv.data._osPhoneLookupTried && adminTokenEarly) {
+    conv.data._osPhoneLookupTried = true;
+    const recentOrders = await getOrdersByPhone(config.domain, adminTokenEarly, conv.phone);
+    if (recentOrders.length === 1) {
+      const only = recentOrders[0]!;
+      await sendWhatsAppButtons(
+        conv.phone,
+        formatOrderStatus(only, l),
+        [
+          { id: 'track_another', title: msg('طلب ثاني', 'Track Another', l) },
+          { id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', l) }
+        ],
+        accessToken,
+        client.phone_number_id
+      );
+      markReprompted(conv);
+      return;
+    }
+    if (recentOrders.length > 1) {
+      // Show up to 3 most recent as buttons (WhatsApp caps interactive
+      // buttons at 3). Remaining orders are available by typing the number.
+      const picks = recentOrders.slice(0, 2).map(o => ({
+        id: `os_pick_${o.order_number}`,
+        title: `#${o.order_number}`
+      }));
+      await sendWhatsAppButtons(
+        conv.phone,
+        msg(
+          `لقينا ${recentOrders.length} طلبات مربوطة برقم جوالك. أي طلب تبي تتابع؟`,
+          `We found ${recentOrders.length} orders linked to your phone. Which one would you like to track?`,
+          l
+        ),
+        [
+          ...picks,
+          { id: 'os_not_mine', title: msg('غير ذلك', 'Other', l) }
+        ],
+        accessToken,
+        client.phone_number_id
+      );
+      conv.data._osPhoneOrderNums = recentOrders.map(o => String(o.order_number));
+      return;
+    }
+    // 0 results → fall through to normal "ask for number" flow.
   }
 
   // STEP 1: Ask for order number
@@ -1477,35 +1598,37 @@ async function handleOrderStatus(
         accessToken,
         client.phone_number_id
       );
-      await notifyOwner(client, conv, config, 'urgent', accessToken);
+      if (!conv.data._osNotifiedOwner) {
+        conv.data._osNotifiedOwner = true;
+        await notifyOwner(client, conv, config, 'urgent', accessToken);
+      }
       conv.data._osContextForwarded = true;
       conv.data._osLastForwardedAt = Date.now();
       markReprompted(conv);
       return;
     }
     // Already escalated (customer tapped "I don't have it") — any further
-    // free-text is extra context (name, product, date). Forward silently
-    // with a 5-min cooldown and a quiet ack, instead of looping the
-    // "couldn't read order number" reprompt. Only short-circuits when the
-    // message isn't a digit-bearing order number — a late-arriving #1042
-    // still falls through to the parser below.
-    if (conv.data._osContextForwarded && !/\d{3,}/.test(normalizeArabicNumbers(message))) {
-      const OS_FORWARD_COOLDOWN_MS = 5 * 60 * 1000;
-      const lastAt = conv.data._osLastForwardedAt as number | undefined;
-      if (!lastAt || (Date.now() - lastAt) >= OS_FORWARD_COOLDOWN_MS) {
-        conv.data._osLastForwardedAt = Date.now();
-        await notifyOwner(client, conv, config, 'urgent', accessToken);
+    // free-text is extra context. The owner was pinged on the first
+    // escalation and will see any follow-up messages in the WhatsApp thread
+    // anyway, so we never re-page them here (anti-spam rule). Only a
+    // late-arriving explicit #1042 falls through to lookup. We also ack only
+    // on the first follow-up; subsequent messages are silent so we don't
+    // spam the customer with "forwarded ✅" on every message.
+    if (conv.data._osContextForwarded && !/#\s*\d+/.test(normalizeArabicNumbers(message))) {
+      if (!conv.data._osFollowupAcked) {
+        conv.data._osFollowupAcked = true;
+        await sendWhatsAppButtons(
+          conv.phone,
+          msg(
+            'تم إرسال رسالتك للفريق ✅',
+            'Your message has been forwarded to our team ✅',
+            l
+          ),
+          [{ id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', l) }],
+          accessToken,
+          client.phone_number_id
+        );
       }
-      await sendWhatsAppMessage(
-        conv.phone,
-        msg(
-          'تم إرسال رسالتك للفريق ✅',
-          'Your message has been forwarded to our team ✅',
-          l
-        ),
-        accessToken,
-        client.phone_number_id
-      );
       return;
     }
     // Prefer #N pattern; otherwise longest 3+ digit run so phone numbers/years
@@ -1565,7 +1688,9 @@ async function handleOrderStatus(
       markReprompted(conv);
       return;
     }
-    // Order not found
+    // Order not found — ping owner once so a human can look the customer
+    // up by phone or past history (Con-flow L21). Repeat lookups in the
+    // same session don't re-page (anti-spam rule).
     await sendWhatsAppButtons(
       conv.phone,
       msg(
@@ -1580,13 +1705,17 @@ async function handleOrderStatus(
       accessToken,
       client.phone_number_id
     );
+    if (!conv.data._osNotifiedOwner) {
+      conv.data._osNotifiedOwner = true;
+      await notifyOwner(client, conv, config, 'urgent', accessToken);
+    }
     markReprompted(conv);
     return;
   }
 
   // No Admin token — fallback: notify owner manually. Ask for context so
   // the owner can find the order faster, instead of just "team will review"
-  // (fgf.md #26). Without Admin API access this is the best we can do.
+  // (fgf.md #26). Ping owner only once per session (anti-spam rule).
   await sendWhatsAppButtons(
     conv.phone,
     msg(
@@ -1601,7 +1730,10 @@ async function handleOrderStatus(
     accessToken,
     client.phone_number_id
   );
-  await notifyOwner(client, conv, config, 'urgent', accessToken);
+  if (!conv.data._osNotifiedOwner) {
+    conv.data._osNotifiedOwner = true;
+    await notifyOwner(client, conv, config, 'urgent', accessToken);
+  }
   markReprompted(conv);
 }
 
@@ -1613,25 +1745,22 @@ async function handleCustomerService(
   client: ClientConfig,
   conv: ConversationState,
   config: ShopifyAgentConfig,
-  message: string,
+  _message: string,
   accessToken: string
 ): Promise<void> {
   const l: string = conv.data._lang || 'ar';
 
-  // Client-configurable response-time label (fgf.md #30). Falls back to
-  // "30 دقيقة" / "30 minutes" for backwards compat with existing clients.
-  const csResponseTimeAr = client.settings?.cs_response_time_ar || '30 دقيقة';
-  const csResponseTimeEn = client.settings?.cs_response_time_en || '30 minutes';
-
-  // First contact — send acknowledgment once
+  // First contact — send acknowledgment once. No time window promised;
+  // we can't guarantee a specific SLA, and giving a number sets a false
+  // expectation when the owner is slow to reply.
   if (!conv.data._csAcknowledged) {
     conv.data._csAcknowledged = true;
     conv.data._csStartedAt = new Date().toISOString();
     await sendWhatsAppMessage(
       conv.phone,
       msg(
-        `وصل طلبك ✅ فريقنا راح يتواصل معك خلال ${csResponseTimeAr}.\n\nإذا عندك تفاصيل إضافية، اكتبها هنا وراح توصل للفريق.`,
-        `Your request has been received ✅ Our team will contact you within ${csResponseTimeEn}.\n\nIf you have additional details, write them here and they will be forwarded to our team.`,
+        'وصل طلبك ✅ فريقنا راح يتواصل معك قريباً.\n\nإذا عندك تفاصيل إضافية، اكتبها هنا وراح توصل للفريق.',
+        'Your request has been received ✅ Our team will be in touch soon.\n\nIf you have additional details, write them here and they will be forwarded to our team.',
         l
       ),
       accessToken,
@@ -1642,45 +1771,28 @@ async function handleCustomerService(
     return;
   }
 
-  // Try AI auto-answer for product questions — e.g. "where are you located?",
-  // "what's the price of خلاص?" — so the owner isn't spammed for things the
-  // bot can answer (fgf.md #29). Requires products loaded; lazy-fetch if not.
-  if (isQuestionMessage(message)) {
-    if (!conv.data._products || conv.data._products.length === 0) {
-      const loaded = await fetchProductsCached(config.domain, config.storefrontToken, conv.data._lang || 'ar');
-      if (loaded.length > 0) {
-        conv.data._products = loaded.map(p => ({
-          id: p.id, title: p.title, description: p.description,
-          priceMin: p.priceMin, priceMax: p.priceMax, imageUrl: p.imageUrl,
-          variants: p.variants, tags: p.tags, compareAtPriceMin: p.compareAtPriceMin
-        }));
-      }
-    }
-    const aiHandled = await tryAIAnswer(client, conv, config, message, accessToken, notifyOwner);
-    if (aiHandled) return;
+  // Second message after ack — remind them once that the team will be in
+  // touch, give a Home escape button, then go silent. The owner was
+  // already notified on the first message and can read the full thread in
+  // WhatsApp — no re-ping (anti-spam rule, Con-flow L25).
+  if (!conv.data._csRepeatAcked) {
+    conv.data._csRepeatAcked = true;
+    await sendWhatsAppButtons(
+      conv.phone,
+      msg(
+        'فريقنا بيتواصل معك قريباً 🙏\n\nتقدر ترجع للرئيسية أو تنتظر رد الفريق.',
+        'Our team will be in touch soon 🙏\n\nYou can return home or wait for our team to reply.',
+        l
+      ),
+      [{ id: 'go_home', title: msg('الرئيسية 🏠', 'Home 🏠', l) }],
+      accessToken,
+      client.phone_number_id
+    );
+    return;
   }
 
-  // Still forward to owner, but with a 5-min cooldown so a rapid burst
-  // of messages doesn't flood the owner's inbox (fgf.md #22 pattern).
-  const CS_NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
-  const lastNotifiedAt = conv.data._csLastNotifiedAt as number | undefined;
-  if (!lastNotifiedAt || (Date.now() - lastNotifiedAt) >= CS_NOTIFY_COOLDOWN_MS) {
-    conv.data._csLastNotifiedAt = Date.now();
-    await notifyOwner(client, conv, config, 'help', accessToken);
-  }
-  // Always ack so the customer knows their message landed — without this
-  // the bot went silent on every follow-up that wasn't AI-answered, making
-  // the chat feel dead even though the owner was reading it.
-  await sendWhatsAppMessage(
-    conv.phone,
-    msg(
-      'تم إرسال رسالتك للفريق ✅',
-      'Your message has been forwarded to our team ✅',
-      l
-    ),
-    accessToken,
-    client.phone_number_id
-  );
+  // Already acked twice — silent. Owner is handling it. Customer can still
+  // type "رئيسية" / "home" or tap the Home button (global handler catches it).
 }
 
 // ============================================================
