@@ -10,6 +10,7 @@
 // ============================================================
 
 import Anthropic from '@anthropic-ai/sdk';
+import type { ZodSchema } from 'zod';
 
 // ── Per-tenant concurrency tracking ─────────────────────────
 
@@ -66,7 +67,7 @@ export function isAIAvailable(): boolean {
  * Run an AI call with per-tenant concurrency control.
  * Returns null if the tenant's concurrent limit is hit.
  */
-export async function withTenantAI<T>(
+async function withTenantAI<T>(
   clientId: string,
   tenantApiKey: string | undefined,
   fn: (anthropic: Anthropic) => Promise<T>
@@ -90,3 +91,44 @@ export async function withTenantAI<T>(
  * Default model to use for AI calls.
  */
 export const AI_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+
+/**
+ * Classify a free-text user message into a typed object validated by a Zod schema.
+ *
+ * Returns the parsed result on success, or null when:
+ *   - AI is unavailable (no key) or tenant concurrency limit hit
+ *   - Model output isn't valid JSON or fails schema validation
+ *
+ * Callers MUST fall back gracefully on null (e.g. keyword matching). This keeps
+ * the system functional during AI outages and avoids hard failures on edge
+ * phrasings the model can't handle.
+ *
+ * Uses AI_MODEL (Haiku by default) — cheap and fast enough for short messages.
+ */
+export async function classifyIntent<T>(
+  ctx: { clientId: string; tenantApiKey?: string },
+  message: string,
+  schema: ZodSchema<T>,
+  instruction: string
+): Promise<T | null> {
+  return withTenantAI(ctx.clientId, ctx.tenantApiKey, async (anthropic) => {
+    const response = await anthropic.messages.create({
+      model: AI_MODEL,
+      max_tokens: 200,
+      system: `${instruction}\n\nRespond with ONLY a JSON object. No preamble, no markdown fences, no explanation.`,
+      messages: [{ role: 'user', content: message }],
+    });
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('')
+      .trim();
+    try {
+      const parsed = JSON.parse(text);
+      const result = schema.safeParse(parsed);
+      return result.success ? result.data : null;
+    } catch {
+      return null;
+    }
+  });
+}

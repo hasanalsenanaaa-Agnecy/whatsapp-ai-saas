@@ -5,7 +5,7 @@
 
 import { getConversation, saveConversation, getClientByPhoneNumberId } from './services/database.js';
 import { emitEvent } from './services/events.js';
-import { withClientContext } from './services/whatsapp.js';
+import { withClientContext, sendWhatsAppMessage } from './services/whatsapp.js';
 import { getDefaultMessages, type ClientMessages } from './messages.js';
 import { DEFAULT_APPOINTMENT_SETTINGS, type AppointmentSettings } from './services/appointments.js';
 import {
@@ -148,6 +148,15 @@ async function handleTurn(
     if (backResult.handled) {
       conv.state = backResult.newState;
       conv.step = backResult.newStep;
+      // Ack and return. Without this, the destination handler would re-run
+      // with the back keyword as input — handleWelcome would treat "رجوع"
+      // as the customer's name and clobber the captured one.
+      const lang = (conv.data as any)?._lang === 'en' ? 'en' : 'ar';
+      const ack = lang === 'en' ? 'Going back ↩️' : 'تم الرجوع ↩️';
+      await sendWhatsAppMessage(customerPhone, ack, accessToken, client.phone_number_id);
+      conv.messages.push({ role: 'assistant', content: ack });
+      await saveConversation(conv);
+      return;
     }
   }
 
@@ -196,7 +205,7 @@ async function handleTurn(
       await handleQuestions(client, conv, message, clientMessages, features, appointmentSettings, accessToken);
       break;
     case 'appointment_date':
-      await handleAppointmentDate(client, conv, message, clientMessages, appointmentSettings, accessToken);
+      await handleAppointmentDate(client, conv, message, clientMessages, appointmentSettings, accessToken, features);
       break;
     case 'appointment_time':
       await handleAppointmentTime(client, conv, message, clientMessages, appointmentSettings, accessToken, features);

@@ -28,7 +28,7 @@ export interface ParsedAIResponse {
   handover: boolean;
 }
 
-export function parseAIResponse(raw: string): ParsedAIResponse {
+function parseAIResponse(raw: string): ParsedAIResponse {
   let text = raw;
   const data: Record<string, string> = {};
 

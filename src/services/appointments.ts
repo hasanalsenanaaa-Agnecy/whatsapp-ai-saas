@@ -1,5 +1,3 @@
-import { sendWhatsAppMessage } from './whatsapp.js';
-
 // ============================================================
 // APPOINTMENT SERVICE
 // Booking, date generation, reminders
@@ -19,18 +17,6 @@ export interface AppointmentSettings {
   reminderMinutesBefore: number;
 }
 
-export interface AppointmentData {
-  clientId: string;
-  leadId?: number;
-  phone: string;
-  name: string;
-  date: string;  // YYYY-MM-DD
-  timeSlot: string;
-  timeLabel: string;
-  appointmentType?: string;
-  notes?: string;
-}
-
 // Default appointment settings (Saudi work week)
 export const DEFAULT_APPOINTMENT_SETTINGS: AppointmentSettings = {
   timeSlots: [
@@ -43,7 +29,7 @@ export const DEFAULT_APPOINTMENT_SETTINGS: AppointmentSettings = {
   reminderMinutesBefore: 60
 };
 
-// Arabic day names
+// Arabic day names (used by getAvailableDates labels)
 const ARABIC_DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 const ARABIC_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
 
@@ -105,17 +91,6 @@ export function getTimeSlots(settings: AppointmentSettings = DEFAULT_APPOINTMENT
 }
 
 /**
- * Format date in Arabic for display
- */
-export function formatDateArabic(dateStr: string): string {
-  const date = new Date(dateStr);
-  const dayName = ARABIC_DAYS[date.getDay()];
-  const dayNum = date.getDate();
-  const monthName = ARABIC_MONTHS[date.getMonth()];
-  return `${dayName} ${dayNum} ${monthName}`;
-}
-
-/**
  * Calculate reminder time
  */
 export function calculateReminderTime(
@@ -149,88 +124,6 @@ export function calculateReminderTime(
   const reminderTime = new Date(date.getTime() - (settings.reminderMinutesBefore * 60 * 1000));
   
   return reminderTime;
-}
-
-/**
- * Format appointment confirmation message
- */
-export function formatAppointmentConfirmation(
-  name: string,
-  dateStr: string,
-  timeLabel: string
-): string {
-  const formattedDate = formatDateArabic(dateStr);
-  return `تمام يا ${name}! ✅
-
-تم حجز موعدك:
-📅 ${formattedDate}
-🕐 ${timeLabel}
-
-بنرسل لك تذكير قبل الموعد.
-شكراً لتواصلك! 🙏`;
-}
-
-/**
- * Format appointment notification for agent
- */
-export function formatAppointmentNotification(
-  name: string,
-  phone: string,
-  dateStr: string,
-  timeLabel: string,
-  leadData?: Record<string, any>
-): string {
-  const formattedDate = formatDateArabic(dateStr);
-  
-  let details = '';
-  if (leadData) {
-    const relevantKeys = Object.entries(leadData)
-      .filter(([k]) => !['name', 'phone', 'whatsappPhone', 'nameAsked', 'leadId', 'appointment', 'appointmentDate', 'appointmentTime'].includes(k))
-      .map(([k, v]) => `${k}: ${v}`)
-      .join('\n');
-    if (relevantKeys) {
-      details = `\n\nالتفاصيل:\n${relevantKeys}`;
-    }
-  }
-
-  return `📅 موعد جديد!
-
-الاسم: ${name}
-الجوال: ${phone}
-التاريخ: ${formattedDate}
-الوقت: ${timeLabel}${details}
-
-wa.me/${phone.replace('+', '')}`;
-}
-
-/**
- * Format reminder message
- */
-export function formatReminderMessage(name: string, timeLabel: string): string {
-  return `مرحبا ${name}! 👋
-
-تذكير بموعدك اليوم ${timeLabel}.
-نتطلع لخدمتك! ✨`;
-}
-
-/**
- * Send appointment reminder
- */
-export async function sendAppointmentReminder(
-  phone: string,
-  name: string,
-  timeLabel: string,
-  accessToken: string,
-  phoneNumberId: string
-): Promise<boolean> {
-  try {
-    const message = formatReminderMessage(name, timeLabel);
-    const sent = await sendWhatsAppMessage(phone, message, accessToken, phoneNumberId);
-    return sent;
-  } catch (error) {
-    console.error('❌ Failed to send reminder:', error);
-    return false;
-  }
 }
 
 /**

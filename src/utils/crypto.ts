@@ -26,7 +26,7 @@ function getKey(): Buffer | null {
  * Encrypt a plaintext string. Returns `enc:<iv>:<tag>:<ciphertext>` (all hex).
  * Returns the original string if encryption key is missing (dev mode).
  */
-export function encrypt(plaintext: string): string {
+function encrypt(plaintext: string): string {
   const key = getKey();
   if (!key) return plaintext;
 
@@ -42,7 +42,7 @@ export function encrypt(plaintext: string): string {
  * Decrypt an encrypted string. If the value doesn't start with `enc:`,
  * returns it as-is (backward compat with existing plaintext values).
  */
-export function decrypt(value: string): string {
+function decrypt(value: string): string {
   if (!value.startsWith(ENCRYPTED_PREFIX)) return value;
 
   const key = getKey();

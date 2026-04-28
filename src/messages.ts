@@ -33,7 +33,7 @@ export interface ClientMessages {
 // ============================================================
 // REAL ESTATE MESSAGES
 // ============================================================
-export const REAL_ESTATE_MESSAGES: ClientMessages = {
+const REAL_ESTATE_MESSAGES: ClientMessages = {
   welcome: `أهلاً فيك في {businessName}! 👋
 
 وش اسمك الكريم؟`,
@@ -112,7 +112,7 @@ wa.me/{whatsapp}`
 // ============================================================
 // CLINIC / MEDICAL MESSAGES
 // ============================================================
-export const CLINIC_MESSAGES: ClientMessages = {
+const CLINIC_MESSAGES: ClientMessages = {
   welcome: `أهلاً فيك في {businessName}! 👋
 
 وش اسمك الكريم؟`,
@@ -189,7 +189,7 @@ wa.me/{whatsapp}`
 // ============================================================
 // CAR DEALERSHIP MESSAGES
 // ============================================================
-export const CAR_DEALERSHIP_MESSAGES: ClientMessages = {
+const CAR_DEALERSHIP_MESSAGES: ClientMessages = {
   welcome: `أهلاً فيك في {businessName}! 👋
 
 وش اسمك الكريم؟`,
@@ -268,7 +268,7 @@ wa.me/{whatsapp}`
 // ============================================================
 // GENERIC MESSAGES (default)
 // ============================================================
-export const GENERIC_MESSAGES: ClientMessages = {
+const GENERIC_MESSAGES: ClientMessages = {
   welcome: `أهلاً فيك في {businessName}! 👋
 
 وش اسمك الكريم؟`,
@@ -345,7 +345,7 @@ wa.me/{whatsapp}`
 // The dedicated shopify bot (shopify-agent.ts) has its own
 // inline messages and does not read these.
 // ============================================================
-export const SHOPIFY_MESSAGES: ClientMessages = {
+const SHOPIFY_MESSAGES: ClientMessages = {
   welcome: `مرحباً بك في {businessName}! 🌴
 
 وش اسمك الكريم؟`,

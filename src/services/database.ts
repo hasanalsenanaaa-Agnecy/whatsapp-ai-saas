@@ -37,7 +37,7 @@ function parseJSON(value: any, fallback: any) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
 
-export function getDefaultFeatures(): ClientFeatures {
+function getDefaultFeatures(): ClientFeatures {
   return { ...DEFAULT_FEATURES };
 }
 
@@ -260,16 +260,6 @@ export async function markReminderSent(appointmentId: number): Promise<boolean> 
     return true;
   } catch (error) {
     console.error('❌ DB error marking reminder sent:', error);
-    return false;
-  }
-}
-
-export async function updateAppointmentStatus(appointmentId: number, status: string): Promise<boolean> {
-  try {
-    await sql`UPDATE appointments SET status = ${status} WHERE id = ${appointmentId}`;
-    return true;
-  } catch (error) {
-    console.error('❌ DB error updating appointment status:', error);
     return false;
   }
 }

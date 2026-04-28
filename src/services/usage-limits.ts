@@ -32,7 +32,7 @@ export const DEFAULT_CAPS = {
 };
 
 // Overage pricing (SAR, pre-VAT) — matches the contract.
-export const OVERAGE_PRICING = {
+const OVERAGE_PRICING = {
   per_500_conversations: 50,
   per_5000_ai_messages: 75,
 };
@@ -101,10 +101,6 @@ export async function getMonthlyUsage(clientId: string): Promise<UsageSnapshot> 
     console.error('❌ getMonthlyUsage error:', error);
     return { conversations: 0, ai_messages: 0, whatsapp_outbound: 0, fetched_at: Date.now() };
   }
-}
-
-export function invalidateUsageCache(clientId: string): void {
-  usageCache.delete(clientId);
 }
 
 // ============================================================

@@ -74,74 +74,6 @@ const PRODUCTS_QUERY = `
   }
 `;
 
-const SEARCH_PRODUCTS_QUERY = `
-  query searchProducts($query: String!, $first: Int!, $language: LanguageCode!) @inContext(language: $language) {
-    products(first: $first, query: $query) {
-      edges {
-        node {
-          id
-          title
-          description
-          tags
-          priceRange {
-            minVariantPrice { amount currencyCode }
-            maxVariantPrice { amount currencyCode }
-          }
-          compareAtPriceRange {
-            minVariantPrice { amount currencyCode }
-          }
-          images(first: 1) {
-            edges { node { url } }
-          }
-          variants(first: 10) {
-            edges {
-              node {
-                id
-                title
-                price { amount currencyCode }
-                compareAtPrice { amount currencyCode }
-                availableForSale
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-
-const PRODUCT_BY_ID_QUERY = `
-  query getProduct($id: ID!, $language: LanguageCode!) @inContext(language: $language) {
-    product(id: $id) {
-      id
-      title
-      description
-      tags
-      priceRange {
-        minVariantPrice { amount currencyCode }
-        maxVariantPrice { amount currencyCode }
-      }
-      compareAtPriceRange {
-        minVariantPrice { amount currencyCode }
-      }
-      images(first: 1) {
-        edges { node { url } }
-      }
-      variants(first: 10) {
-        edges {
-          node {
-            id
-            title
-            price { amount currencyCode }
-            compareAtPrice { amount currencyCode }
-            availableForSale
-          }
-        }
-      }
-    }
-  }
-`;
-
 function buildCartMutation(countryCode?: string): string {
   const ctx = countryCode ? ` @inContext(country: ${countryCode})` : '';
   const identity = countryCode ? `buyerIdentity: { countryCode: ${countryCode} },` : '';
@@ -289,11 +221,6 @@ export function formatPrice(amount: string | number, currency?: string): string 
   return `${formatted} ${symbols[currency] ?? currency}`;
 }
 
-/** @deprecated Use formatPrice instead */
-export function formatPriceSAR(amount: string | number): string {
-  return formatPrice(amount);
-}
-
 // ============================================================
 // PUBLIC API
 // ============================================================
@@ -336,55 +263,6 @@ export async function fetchProductsOrThrow(
     products: { edges: { node: Record<string, unknown> }[] };
   };
   return data.products.edges.map(e => parseProduct(e.node));
-}
-
-/**
- * Search products by keyword
- */
-export async function searchProducts(
-  shopifyDomain: string,
-  storefrontToken: string | undefined,
-  query: string,
-  limit = 10,
-  lang = 'ar'
-): Promise<ShopifyProduct[]> {
-  try {
-    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, SEARCH_PRODUCTS_QUERY, {
-      query,
-      first: limit,
-      language: lang === 'en' ? 'EN' : 'AR'
-    }, lang) as {
-      products: { edges: { node: Record<string, unknown> }[] };
-    };
-    return data.products.edges.map(e => parseProduct(e.node));
-  } catch (error) {
-    console.error('❌ Shopify searchProducts error:', error);
-    return [];
-  }
-}
-
-/**
- * Get a single product by its Shopify GID
- */
-export async function getProductById(
-  shopifyDomain: string,
-  storefrontToken: string | undefined,
-  productId: string,
-  lang = 'ar'
-): Promise<ShopifyProduct | null> {
-  try {
-    const data = await shopifyGraphQL(shopifyDomain, storefrontToken, PRODUCT_BY_ID_QUERY, {
-      id: productId,
-      language: lang === 'en' ? 'EN' : 'AR'
-    }, lang) as {
-      product: Record<string, unknown> | null;
-    };
-    if (!data.product) return null;
-    return parseProduct(data.product);
-  } catch (error) {
-    console.error('❌ Shopify getProductById error:', error);
-    return null;
-  }
 }
 
 /**

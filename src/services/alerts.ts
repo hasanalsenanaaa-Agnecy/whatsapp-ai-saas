@@ -70,7 +70,7 @@ export function trackError(clientId?: string): void {
 /**
  * Get current error count in the active window.
  */
-export function getErrorCount(): number {
+function getErrorCount(): number {
   const cutoff = Date.now() - ERROR_WINDOW_MS;
   while (errorTimestamps.length > 0 && errorTimestamps[0]! < cutoff) {
     errorTimestamps.shift();
@@ -86,7 +86,7 @@ let ownerCooldownUntil = 0;
 let suppressedCount = 0;
 const OWNER_COOLDOWN_MS = 5 * 60 * 1000;
 
-export async function sendOwnerAlert(
+async function sendOwnerAlert(
   type: 'error' | 'warning' | 'info',
   message: string,
   details?: string
@@ -140,7 +140,7 @@ export async function alertError(error: Error | string, context?: string): Promi
  * Uses their own WhatsApp credentials to send to their agent phone.
  * 30-min cooldown per client to prevent floods.
  */
-export async function alertClient(
+async function alertClient(
   client: ClientConfig,
   message: string,
   details?: string
@@ -206,7 +206,7 @@ export async function trackClientError(
 // agent_phones[0] using their own WhatsApp credentials.
 // ============================================================
 
-export async function sendClientDailySummary(client: ClientConfig): Promise<boolean> {
+async function sendClientDailySummary(client: ClientConfig): Promise<boolean> {
   const agentPhone = client.agent_phones?.[0];
   if (!agentPhone || !client.access_token || !client.phone_number_id) {
     return false;
@@ -300,7 +300,7 @@ export async function sendAllClientDailySummaries(): Promise<{ sent: number; fai
 // 1st of each month.
 // ============================================================
 
-export async function sendClientMonthlySummary(client: ClientConfig): Promise<boolean> {
+async function sendClientMonthlySummary(client: ClientConfig): Promise<boolean> {
   const agentPhone = client.agent_phones?.[0];
   if (!agentPhone || !client.access_token || !client.phone_number_id) {
     return false;
