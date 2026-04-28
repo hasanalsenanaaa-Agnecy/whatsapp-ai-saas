@@ -8,6 +8,13 @@ import { emitEvent } from './services/events.js';
 import { withClientContext } from './services/whatsapp.js';
 import { getDefaultMessages, type ClientMessages } from './messages.js';
 import { DEFAULT_APPOINTMENT_SETTINGS, type AppointmentSettings } from './services/appointments.js';
+import {
+  isShopifyClient,
+  isAIConversationMode,
+  shouldHandover,
+  shouldReset,
+  handleBackCommand,
+} from './conversation.guards.js';
 
 // Flow handlers
 import { handleShopifyAgent } from './flows/ecommerce.js';
@@ -19,13 +26,8 @@ import {
   handleChat,
   handleAIConversation,
   handleHandoverRequest,
-  detectHandoverIntent,
-  isAIConversationAvailable,
-  type ConversationState,
   type ClientFeatures
 } from './flows/common.js';
-
-const CONVERSATION_TIMEOUT_HOURS = 4;
 
 // ============================================================
 // PER-CUSTOMER ASYNC LOCK
@@ -102,7 +104,7 @@ async function handleTurn(
   let conv = await getConversation(client.id, customerPhone);
   const now = new Date().toISOString();
 
-  if (!conv || checkShouldReset(conv, message)) {
+  if (!conv || shouldReset(conv, message)) {
     // Preserve low-cost / customer-affecting flags across resets so a
     // returning customer isn't re-asked for language and consent every time
     // they type "restart" or timeout. PDPL consent is long-lived; re-asking
@@ -144,7 +146,7 @@ async function handleTurn(
   if (conv.state !== 'completed' && conv.state !== 'chat') {
     const backResult = handleBackCommand(message, conv);
     if (backResult.handled) {
-      conv.state = backResult.newState as any;
+      conv.state = backResult.newState;
       conv.step = backResult.newStep;
     }
   }
@@ -152,7 +154,7 @@ async function handleTurn(
   // ============================================================
   // HANDOVER DETECTION (works in any state when enabled)
   // ============================================================
-  if (features.handover_detection && detectHandoverIntent(message)) {
+  if (shouldHandover(features, message)) {
     await handleHandoverRequest(client, conv, message, clientMessages, accessToken);
     emitEvent(client.id, 'escalation', customerPhone, { reason: 'handover_detected' });
     await saveConversation(conv);
@@ -164,8 +166,7 @@ async function handleTurn(
   // ============================================================
 
   // ECOMMERCE — Shopify Agent mode
-  const hasShopifyConfig = client.settings?.shopify_domain || client.settings?.shopify?.domain;
-  if (hasShopifyConfig && (conv.state === 'welcome' || conv.state === 'shopify_agent')) {
+  if (isShopifyClient(client) && (conv.state === 'welcome' || conv.state === 'shopify_agent')) {
     conv.state = 'shopify_agent';
     await handleShopifyAgent(client, conv, message, accessToken);
     await saveConversation(conv);
@@ -173,7 +174,7 @@ async function handleTurn(
   }
 
   // AI CONVERSATION MODE — skips rigid flow entirely
-  if (features.ai_conversation && isAIConversationAvailable()) {
+  if (isAIConversationMode(features)) {
     if (conv.state === 'welcome' || conv.state === 'ai_conversation') {
       conv.state = 'ai_conversation';
       await handleAIConversation(client, conv, message, features, accessToken);
@@ -213,43 +214,4 @@ async function handleTurn(
   }
 
   await saveConversation(conv);
-}
-
-// ============================================================
-// ROUTER HELPERS
-// ============================================================
-
-function checkShouldReset(conv: ConversationState, message: string): boolean {
-  const restartKeywords = ['restart', 'start over', 'من جديد', 'ابدا من جديد', 'reset', 'بداية'];
-  if (restartKeywords.some(keyword => message.toLowerCase().includes(keyword))) return true;
-
-  const lastUpdate = new Date(conv.updatedAt);
-  const hoursSinceUpdate = (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60);
-
-  // Extended window when the customer has unfinished business: a populated cart
-  // or a pending payment. Wiping after 4h loses their cart + language + consent.
-  const hasCart = Array.isArray((conv.data as any)?._cart) && (conv.data as any)._cart.length > 0;
-  const shopifyState = (conv.data as any)?._shopifyState;
-  const inPaymentFlow = shopifyState === 'awaiting_payment' || shopifyState === 'order_complete';
-  const effectiveTimeout = (hasCart || inPaymentFlow) ? 48 : CONVERSATION_TIMEOUT_HOURS;
-
-  return hoursSinceUpdate > effectiveTimeout;
-}
-
-function handleBackCommand(message: string, conv: ConversationState): { handled: boolean; newState: string; newStep: number } {
-  const backKeywords = ['back', 'رجوع', 'السابق', 'ارجع', 'previous'];
-  if (!backKeywords.some(keyword => message.toLowerCase().includes(keyword))) {
-    return { handled: false, newState: conv.state, newStep: conv.step };
-  }
-
-  if (conv.state === 'questions' && conv.step > 0) {
-    return { handled: true, newState: 'questions', newStep: conv.step - 1 };
-  } else if (conv.state === 'questions' && conv.step === 0) {
-    return { handled: true, newState: 'welcome', newStep: 0 };
-  } else if (conv.state === 'appointment_date') {
-    return { handled: true, newState: 'questions', newStep: conv.step };
-  } else if (conv.state === 'appointment_time') {
-    return { handled: true, newState: 'appointment_date', newStep: 0 };
-  }
-  return { handled: false, newState: conv.state, newStep: conv.step };
 }

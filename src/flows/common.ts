@@ -32,6 +32,7 @@ import { pushToBookingAPI } from '../services/bookingWebhook.js';
 import { normalizeArabicNumbers, maskPhone } from '../utils/buttons.js';
 import { emitEvent } from '../services/events.js';
 import type { ClientConfig, ClientFeatures } from '../types/client.js';
+import type { ConvStateName } from '../types/conversation.js';
 
 // ============================================================
 // TYPES (re-exported for use by other flows)
@@ -41,7 +42,7 @@ export interface ConversationState {
   clientId: string;
   phone: string;
   messages: { role: string; content: string }[];
-  state: string;
+  state: ConvStateName;
   step: number;
   data: Record<string, any>;
   createdAt: string;
