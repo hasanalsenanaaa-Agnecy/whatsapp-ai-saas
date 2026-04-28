@@ -403,6 +403,74 @@ export function resetCurrentOrder(conv: ConversationState): void {
   // Preserve: _lang, _products, _orderHistory, name, _nameAsked
 }
 
+// Clear intent-scoped state without touching cart/lang/consent. Used by
+// `go_home` and the global intent-switch path so a returning customer
+// gets a fresh intent menu (and a fresh AI budget) without losing their
+// session identity.
+export function clearIntentScopedState(conv: ConversationState): void {
+  delete conv.data._intent;
+  delete conv.data._intentAsked;
+  delete conv.data._osOrderNum;
+  delete conv.data._osOrderNumAsked;
+  delete conv.data._osContextForwarded;
+  delete conv.data._osLastForwardedAt;
+  delete conv.data._osEmail;
+  delete conv.data._osEmailAsked;
+  delete conv.data._osFollowupAcked;
+  delete conv.data._osNotifiedOwner;
+  delete conv.data._osPhoneLookupTried;
+  delete conv.data._osPhoneOrderNums;
+  delete conv.data._csAcknowledged;
+  delete conv.data._csStartedAt;
+  delete conv.data._csRepeatAcked;
+  delete conv.data._csLastNotifiedAt;
+  delete conv.data._globalContactNotified;
+  delete conv.data._orderCompleteNotified;
+  delete conv.data._paymentHelpNotified;
+  delete conv.data._aiAnswerCount;
+  delete conv.data._aiExhaustedNotified;
+  delete conv.data._aiBudgetRefunded;
+  conv.data._reprompted = null;
+}
+
+// Lazy product-catalog load. Only fetches if the in-session catalog is
+// missing/empty. Idempotent; safe to call before any path that reads
+// `conv.data._products`.
+export async function loadProductsIfNeeded(
+  conv: ConversationState,
+  config: ShopifyAgentConfig
+): Promise<void> {
+  if (conv.data._products && conv.data._products.length > 0) return;
+  const loaded = await fetchProductsCached(config.domain, config.storefrontToken, conv.data._lang || 'ar');
+  if (loaded.length === 0) return;
+  conv.data._products = loaded.map(p => ({
+    id: p.id, title: p.title, description: p.description,
+    priceMin: p.priceMin, priceMax: p.priceMax, imageUrl: p.imageUrl,
+    variants: p.variants, tags: p.tags, compareAtPriceMin: p.compareAtPriceMin
+  }));
+}
+
+// Render one cart line. Default: "- title (variant) xN — price". Used in
+// the cart UI, the payment summary, and the owner notification (with a
+// 📦 prefix). Pass `includePrice: false` for stale-cart lists where the
+// old prices are no longer trustworthy.
+export function formatCartLine(
+  item: CartItem,
+  currency: string | undefined,
+  opts: { prefix?: string; includePrice?: boolean } = {}
+): string {
+  const { prefix = '-', includePrice = true } = opts;
+  const qty = item.quantity || 1;
+  let line = `${prefix} ${item.productTitle}`;
+  if (item.variantTitle && item.variantTitle !== 'Default Title') line += ` (${item.variantTitle})`;
+  if (qty > 1) line += ` x${qty}`;
+  if (includePrice) {
+    const total = (parseFloat(item.price) * qty).toFixed(2);
+    line += ` — ${formatPrice(total, currency)}`;
+  }
+  return line;
+}
+
 // ============================================================
 // SMART VARIANT TITLE — fits variant + price in WhatsApp button limit
 // ============================================================
