@@ -26,18 +26,22 @@ portal/           Next.js client dashboard
 ## Key source files
 
 ```
-src/conversation.ts        — State machine router (all industry flows)
-src/messages.ts            — WhatsApp message templates (Gulf Arabic)
-src/index.ts               — Fastify server + webhook handlers + analytics API
-src/services/ai-client.ts  — Centralized AI client (per-tenant concurrency)
-src/services/analytics.ts  — Revenue, funnel, usage, AI cost, top products
-src/services/shopify/      — Shopify agent (5 modules: handlers, display, ai, helpers, types)
-src/services/              — Database, WhatsApp API, appointments, events, alerts
-src/flows/                 — Industry-specific conversation flows
-src/utils/crypto.ts        — AES-256-GCM token encryption
-src/scripts/               — CLI tools (add clients, set tiers, encrypt tokens, revenue)
-src/__tests__/             — 93 unit tests (Vitest)
-src/cron/                  — Abandoned cart recovery, appointment reminders
+src/conversation.ts          — State machine router (all industry flows)
+src/messages.ts              — WhatsApp message templates (Gulf Arabic)
+src/index.ts                 — Fastify server + webhook handlers + analytics API
+src/services/ai-client.ts    — Centralized AI client (per-tenant concurrency)
+src/services/analytics.ts    — Revenue, funnel, usage, AI cost, top products
+src/services/usage-limits.ts — Monthly conversation/AI caps + 80% warnings
+src/services/shopify/        — Shopify agent (handlers, display, ai, helpers, types)
+src/services/bookingWebhook.ts — Clinic booking API integration
+src/services/clinicData.ts   — Clinic types/data structures
+src/services/                — Database, WhatsApp API, appointments, events, alerts
+src/flows/                   — Industry-specific conversation flows (common, ecommerce)
+src/utils/crypto.ts          — AES-256-GCM token encryption
+src/scripts/                 — CLI tools (clients, tiers, encrypt tokens, revenue, exports, policies, setup)
+src/__tests__/               — 197 unit + integration tests (Vitest, 11 files)
+src/cron/                    — Abandoned cart, appointment reminders, PDPL data retention
+migrations/                  — 001 unique constraints, 002 events, 003 PDPL, 004 dashboard key
 ```
 
 ## Tech stack
