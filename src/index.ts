@@ -2,7 +2,7 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import cors from '@fastify/cors';
-import { initDatabase, getClientByPhoneNumberId, getClientById, deleteCustomerData, validateDashboardKey, listConversations, getConversationDetail, listClients, listAlerts } from './services/database.js';
+import { initDatabase, closeDatabase, getClientByPhoneNumberId, getClientById, getClientByVerifyToken, deleteCustomerData, validateDashboardKey, listConversations, getConversationDetail, listClients, listAlerts, getCustomerProfile } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
 import { handleReminderCron } from './cron/reminders.js';
@@ -100,6 +100,42 @@ await initDatabase();
 await initGoogleSheets();
 
 // ============================================================
+// DASHBOARD API RATE LIMITS — keyed by auth key, not IP.
+// A stolen key from one IP can be reused from many; per-key limits
+// the only ceiling that survives that. Auth-validate stays per-IP
+// (no key yet) to throttle brute-force key guessing.
+// ============================================================
+
+const dashboardKeyOrIp = (req: any) => {
+  const key = (req.query as any)?.key;
+  return key ? `dash:${key}` : `ip:${req.ip}`;
+};
+
+const dashboardReadLimit = {
+  config: { rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: dashboardKeyOrIp } },
+};
+
+const dashboardWriteLimit = {
+  config: { rateLimit: { max: 30, timeWindow: '1 minute', keyGenerator: dashboardKeyOrIp } },
+};
+
+const authValidateLimit = {
+  config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+};
+
+// ============================================================
+// IN-FLIGHT TASK TRACKING — webhook handlers ack 200 immediately
+// then process via setImmediate. We track those background tasks
+// so graceful shutdown can wait for them to drain.
+// ============================================================
+
+let inFlightTasks = 0;
+function trackTask(fn: () => Promise<void>): void {
+  inFlightTasks++;
+  fn().finally(() => { inFlightTasks--; });
+}
+
+// ============================================================
 // PAYLOAD HELPERS
 // ============================================================
 
@@ -159,7 +195,7 @@ fastify.get('/health', async (_request, reply) => {
 });
 
 // Analytics API — owner sees all, client sees own data only
-fastify.get('/api/analytics/revenue', async (request, reply) => {
+fastify.get('/api/analytics/revenue', dashboardReadLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -167,7 +203,7 @@ fastify.get('/api/analytics/revenue', async (request, reply) => {
   return getRevenueByClient(clientId, parseInt(query.months) || 3);
 });
 
-fastify.get('/api/analytics/funnel', async (request, reply) => {
+fastify.get('/api/analytics/funnel', dashboardReadLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -176,7 +212,7 @@ fastify.get('/api/analytics/funnel', async (request, reply) => {
   return getConversionFunnel(clientId, parseInt(query.months) || 3);
 });
 
-fastify.get('/api/analytics/usage', async (request, reply) => {
+fastify.get('/api/analytics/usage', dashboardReadLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -184,7 +220,7 @@ fastify.get('/api/analytics/usage', async (request, reply) => {
   return getUsageSummary(clientId, parseInt(query.months) || 3);
 });
 
-fastify.get('/api/analytics/products', async (request, reply) => {
+fastify.get('/api/analytics/products', dashboardReadLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -193,7 +229,7 @@ fastify.get('/api/analytics/products', async (request, reply) => {
   return getTopProducts(clientId, parseInt(query.months) || 3, parseInt(query.limit) || 10);
 });
 
-fastify.get('/api/analytics/ai-cost', async (request, reply) => {
+fastify.get('/api/analytics/ai-cost', dashboardReadLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -206,7 +242,7 @@ fastify.get('/api/analytics/ai-cost', async (request, reply) => {
 // ============================================================
 
 // Auth validation — returns role + client info
-fastify.get('/api/auth/validate', async (request, reply) => {
+fastify.get('/api/auth/validate', authValidateLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'invalid key' });
@@ -214,7 +250,7 @@ fastify.get('/api/auth/validate', async (request, reply) => {
 });
 
 // Conversation list (paginated)
-fastify.get('/api/conversations', async (request, reply) => {
+fastify.get('/api/conversations', dashboardReadLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -231,7 +267,7 @@ fastify.get('/api/conversations', async (request, reply) => {
 });
 
 // Conversation detail (full messages)
-fastify.get('/api/conversations/:phone', async (request, reply) => {
+fastify.get('/api/conversations/:phone', dashboardReadLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -246,7 +282,7 @@ fastify.get('/api/conversations/:phone', async (request, reply) => {
 });
 
 // Send message to a customer from the dashboard
-fastify.post('/api/conversations/:phone/send', async (request, reply) => {
+fastify.post('/api/conversations/:phone/send', dashboardWriteLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -271,7 +307,7 @@ fastify.post('/api/conversations/:phone/send', async (request, reply) => {
 });
 
 // Client list (owner only)
-fastify.get('/api/clients', async (request, reply) => {
+fastify.get('/api/clients', dashboardReadLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -281,7 +317,7 @@ fastify.get('/api/clients', async (request, reply) => {
 });
 
 // Alert history
-fastify.get('/api/alerts', async (request, reply) => {
+fastify.get('/api/alerts', dashboardReadLimit, async (request, reply) => {
   const query = request.query as any;
   const auth = await validateDashboardKey(query.key);
   if (!auth) return reply.code(401).send({ error: 'unauthorized' });
@@ -292,6 +328,21 @@ fastify.get('/api/alerts', async (request, reply) => {
     clientId,
     limit: parseInt(query.limit) || 50,
   });
+});
+
+// Customer profile — lifetime stats for one phone within one client
+fastify.get('/api/customers/:phone', dashboardReadLimit, async (request, reply) => {
+  const query = request.query as any;
+  const auth = await validateDashboardKey(query.key);
+  if (!auth) return reply.code(401).send({ error: 'unauthorized' });
+
+  const { phone } = request.params as { phone: string };
+  const requestedClientId = auth.role === 'client' ? auth.clientId : query.client_id;
+  if (!requestedClientId) return reply.code(400).send({ error: 'client_id required' });
+
+  const profile = await getCustomerProfile(requestedClientId, phone);
+  if (!profile) return reply.code(404).send({ error: 'customer not found' });
+  return profile;
 });
 
 // PDPL — Right to deletion (DELETE /api/customer/:phone)
@@ -305,11 +356,20 @@ fastify.delete('/api/customer/:phone', async (request, reply) => {
 });
 
 // WhatsApp webhook verification
+// Multi-tenant: each client row stores its own verify_token. We accept the
+// request if the presented token matches any active client's token, or the
+// global env fallback (kept so the original test-number registration still
+// re-verifies if Meta ever re-runs the handshake).
 fastify.get('/webhook/whatsapp', async (request, reply) => {
   const query = request.query as any;
-  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
-  if (query['hub.mode'] === 'subscribe' && query['hub.verify_token'] === verifyToken) {
-    console.log('Webhook verified');
+  if (query['hub.mode'] !== 'subscribe') return reply.code(403).send('Forbidden');
+  const presented = query['hub.verify_token'] as string | undefined;
+  if (!presented) return reply.code(403).send('Forbidden');
+
+  const matchedClient = await getClientByVerifyToken(presented);
+  const envFallback = process.env.WHATSAPP_VERIFY_TOKEN;
+  if (matchedClient || (envFallback && presented === envFallback)) {
+    console.log(`Webhook verified${matchedClient ? ` for client ${matchedClient.id}` : ' via env fallback'}`);
     return reply.send(query['hub.challenge']);
   }
   return reply.code(403).send('Forbidden');
@@ -334,7 +394,7 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
   // Respond 200 immediately — WhatsApp requires fast acknowledgment
   reply.code(200).send({ ok: true });
 
-  setImmediate(async () => {
+  setImmediate(() => trackTask(async () => {
     try {
       if (!phoneNumberId || !customerPhone || !messageText) return;
 
@@ -373,7 +433,7 @@ fastify.post('/webhook/whatsapp', async (request, reply) => {
       emitEvent('system', 'error', customerPhone || undefined, { error: (error as Error)?.message });
       await alertError(error as Error, 'Webhook processing failed');
     }
-  });
+  }));
 });
 
 // Cron endpoint for appointment reminders
@@ -423,7 +483,7 @@ fastify.post('/cron/monthly-summary', async (request, reply) => {
 });
 
 // Per-client usage endpoint (for dashboard) — returns current month usage + caps + overage
-fastify.get<{ Params: { clientId: string }; Querystring: { key?: string } }>('/api/usage/:clientId', async (request, reply) => {
+fastify.get<{ Params: { clientId: string }; Querystring: { key?: string } }>('/api/usage/:clientId', dashboardReadLimit, async (request, reply) => {
   const { clientId } = request.params;
   const { key } = request.query;
   if (!key) return reply.code(401).send({ error: 'key required' });
@@ -450,7 +510,7 @@ fastify.post('/webhook/shopify', async (request, reply) => {
   // Acknowledge immediately — Shopify requires fast response
   reply.code(200).send({ ok: true });
 
-  setImmediate(async () => {
+  setImmediate(() => trackTask(async () => {
     try {
       await handleShopifyWebhook(request.body, rawBody, hmacHeader, shopDomain, topic);
     } catch (error) {
@@ -458,7 +518,7 @@ fastify.post('/webhook/shopify', async (request, reply) => {
       trackError();
       await alertError(error as Error, 'Shopify webhook processing failed');
     }
-  });
+  }));
 });
 
 const start = async () => {
@@ -468,3 +528,41 @@ const start = async () => {
   await sendAlert('info', 'Server started', 'WhatsApp AI Bot running on port ' + port);
 };
 start();
+
+// ============================================================
+// GRACEFUL SHUTDOWN — drain in-flight customer messages before exit.
+// Hosting platforms send SIGTERM with ~30s grace; we cap at 25s
+// and force-exit after that to avoid being SIGKILL'd mid-cleanup.
+// ============================================================
+
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n${signal} received — shutting down gracefully`);
+  try {
+    await fastify.close();
+    console.log('✅ HTTP server closed (no new requests accepted)');
+
+    const deadline = Date.now() + 25_000;
+    while (inFlightTasks > 0 && Date.now() < deadline) {
+      console.log(`Waiting for ${inFlightTasks} in-flight task(s)...`);
+      await new Promise(r => setTimeout(r, 500));
+    }
+    if (inFlightTasks > 0) {
+      console.warn(`⚠️  Shutdown timeout — ${inFlightTasks} task(s) still in flight, exiting anyway`);
+    } else {
+      console.log('✅ All in-flight tasks finished');
+    }
+
+    await closeDatabase();
+    console.log('✅ Database connections closed');
+    process.exit(0);
+  } catch (err) {
+    console.error('Shutdown error:', err);
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

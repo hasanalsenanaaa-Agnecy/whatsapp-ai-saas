@@ -27,6 +27,10 @@ export async function initDatabase() {
   console.log('✅ Database connected');
 }
 
+export async function closeDatabase() {
+  if (sql) await sql.end({ timeout: 5 });
+}
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -89,6 +93,13 @@ export async function getClientByShopifyDomain(domain: string): Promise<ClientCo
 export async function getClientById(clientId: string): Promise<ClientConfig | null> {
   try {
     const rows = await sql`SELECT * FROM clients WHERE id = ${clientId} AND active = true LIMIT 1`;
+    return rows[0] ? parseClientRow(rows[0]) : null;
+  } catch (error) { console.error('❌ DB error:', error); return null; }
+}
+
+export async function getClientByVerifyToken(token: string): Promise<ClientConfig | null> {
+  try {
+    const rows = await sql`SELECT * FROM clients WHERE verify_token = ${token} AND active = true LIMIT 1`;
     return rows[0] ? parseClientRow(rows[0]) : null;
   } catch (error) { console.error('❌ DB error:', error); return null; }
 }
@@ -476,6 +487,91 @@ export async function listClients(): Promise<any[]> {
   } catch (error) {
     console.error('❌ listClients error:', error);
     return [];
+  }
+}
+
+/**
+ * Customer profile — aggregates lifetime stats for a single phone number,
+ * scoped to one client. Used by the customer profile view in the dashboard.
+ */
+export async function getCustomerProfile(clientId: string, phone: string): Promise<{
+  phone: string;
+  client_id: string;
+  client_name: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  message_count: number;
+  conversation_state: string | null;
+  total_orders: number;
+  total_revenue: number;
+  currency: string;
+  recent_orders: Array<{ created_at: string; total: number; currency: string }>;
+} | null> {
+  try {
+    const [convRows, orderRows, totalsRows] = await Promise.all([
+      sql`
+        SELECT
+          c.phone,
+          c.client_id,
+          cl.name AS client_name,
+          c.created_at,
+          c.updated_at,
+          c.state,
+          jsonb_array_length(COALESCE(c.messages, '[]'::jsonb)) AS message_count
+        FROM conversations c
+        JOIN clients cl ON cl.id = c.client_id
+        WHERE c.client_id = ${clientId} AND c.phone = ${phone}
+        LIMIT 1
+      `,
+      sql`
+        SELECT
+          e.created_at,
+          (e.data->>'total')::numeric AS total,
+          COALESCE(e.data->>'currency', 'SAR') AS currency
+        FROM events e
+        WHERE e.client_id = ${clientId}
+          AND e.phone = ${phone}
+          AND e.event_type = 'payment_verified'
+        ORDER BY e.created_at DESC
+        LIMIT 10
+      `,
+      sql`
+        SELECT
+          COUNT(*) AS order_count,
+          COALESCE(SUM((data->>'total')::numeric), 0) AS revenue
+        FROM events
+        WHERE client_id = ${clientId}
+          AND phone = ${phone}
+          AND event_type = 'payment_verified'
+      `,
+    ]);
+
+    if (!convRows[0] && !orderRows.length) return null;
+
+    const conv = convRows[0];
+    const totals = totalsRows[0];
+    const currency = orderRows[0]?.currency || 'SAR';
+
+    return {
+      phone,
+      client_id: clientId,
+      client_name: conv?.client_name || null,
+      first_seen: conv?.created_at || null,
+      last_seen: conv?.updated_at || null,
+      message_count: parseInt(conv?.message_count) || 0,
+      conversation_state: conv?.state || null,
+      total_orders: parseInt(totals?.order_count) || 0,
+      total_revenue: parseFloat(totals?.revenue) || 0,
+      currency,
+      recent_orders: orderRows.map(r => ({
+        created_at: r.created_at,
+        total: parseFloat(r.total) || 0,
+        currency: r.currency || 'SAR',
+      })),
+    };
+  } catch (error) {
+    console.error('❌ getCustomerProfile error:', error);
+    return null;
   }
 }
 
