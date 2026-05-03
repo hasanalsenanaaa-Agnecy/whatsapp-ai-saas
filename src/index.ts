@@ -187,7 +187,172 @@ function verifyWebhookSignature(rawBody: string, signature: string, secret: stri
 // ROUTES
 // ============================================================
 
-fastify.get('/', async () => ({ service: 'WhatsApp AI Receptionist', status: 'running', version: '3.0.0' }));
+// Public marketing pages — also satisfy Meta's Tech Provider review requirement
+// for a real landing page + privacy policy + terms of service at the App's URL.
+const html = (title: string, body: string) => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1a1a1a;background:#fafafa}
+.wrap{max-width:760px;margin:0 auto;padding:48px 24px}
+header{padding-bottom:32px;border-bottom:1px solid #e5e5e5;margin-bottom:32px}
+.brand{font-size:24px;font-weight:700;color:#0a0a0a;text-decoration:none}
+.brand span{color:#16a34a}
+nav{margin-top:16px}
+nav a{color:#525252;margin-right:20px;text-decoration:none;font-size:14px}
+nav a:hover{color:#16a34a}
+h1{font-size:32px;margin-bottom:16px;color:#0a0a0a}
+h2{font-size:20px;margin:32px 0 12px;color:#0a0a0a}
+h3{font-size:16px;margin:20px 0 8px;color:#262626}
+p,li{margin-bottom:12px;color:#404040}
+ul{padding-left:24px}
+strong{color:#171717}
+.lead{font-size:18px;color:#525252;margin-bottom:24px}
+footer{margin-top:64px;padding-top:24px;border-top:1px solid #e5e5e5;color:#737373;font-size:13px}
+footer a{color:#16a34a;text-decoration:none}
+.muted{color:#737373;font-size:13px}
+code{background:#f5f5f5;padding:2px 6px;border-radius:4px;font-size:13px}
+</style></head>
+<body><div class="wrap">
+<header>
+<a href="/" class="brand">Flow<span>mation</span></a>
+<nav><a href="/">Home</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+</header>
+${body}
+<footer>© 2026 Flowmation · <a href="mailto:hasanalsenanaaa@gmail.com">hasanalsenanaaa@gmail.com</a> · Kingdom of Saudi Arabia</footer>
+</div></body></html>`;
+
+fastify.get('/', async (_req, reply) => reply.type('text/html').send(html('Flowmation — WhatsApp AI for Gulf businesses', `
+<h1>WhatsApp automation, built for the Gulf.</h1>
+<p class="lead">Flowmation lets Saudi and Kuwaiti SMBs run their entire WhatsApp customer experience on autopilot — Arabic-first AI, native Shopify checkout, appointment booking, and lead qualification.</p>
+<h2>What it does</h2>
+<ul>
+<li><strong>Arabic + English conversations</strong> handled by Claude, with handover to a human when the customer asks</li>
+<li><strong>Shopify catalog browsing and checkout</strong> inside WhatsApp — customers pay and the bot confirms</li>
+<li><strong>Appointment booking</strong> for clinics, salons, and service providers</li>
+<li><strong>Lead capture and qualification</strong> for real estate, car dealerships, education</li>
+<li><strong>Owner notifications</strong> on every order, lead, and escalation</li>
+</ul>
+<h2>Built on official infrastructure</h2>
+<p>We use the Meta WhatsApp Business Cloud API directly — no grey-market gateways, no message risk. Customer data is encrypted at rest, retained for 24 months, and complies with Saudi PDPL.</p>
+<h2>Get in touch</h2>
+<p>Onboarding is invitation-based while we work with launch partners. Email <a href="mailto:hasanalsenanaaa@gmail.com">hasanalsenanaaa@gmail.com</a> if you operate a Gulf SMB and want a demo.</p>
+`)));
+
+fastify.get('/privacy', async (_req, reply) => reply.type('text/html').send(html('Privacy Policy — Flowmation', `
+<h1>Privacy Policy</h1>
+<p class="muted">Last updated: 3 May 2026</p>
+<p>Flowmation ("we", "us") provides a WhatsApp customer-service automation platform to businesses ("our clients"). This policy explains what data we collect from end customers who message our clients via WhatsApp, how we use it, and the rights end customers have.</p>
+
+<h2>Who is the data controller</h2>
+<p>For end-customer messages received through a client's WhatsApp number, that <strong>client business is the data controller</strong>. Flowmation acts as a data processor on the client's behalf. For our own marketing site visitors, Flowmation is the controller.</p>
+
+<h2>What we collect</h2>
+<ul>
+<li><strong>WhatsApp phone number</strong> of each end customer who messages a Flowmation client</li>
+<li><strong>Message content</strong> exchanged between the end customer and the bot</li>
+<li><strong>Conversation state</strong> (current step in the bot flow, language preference)</li>
+<li><strong>Order events</strong> from connected Shopify stores (order ID, total, currency, status — when an end customer pays)</li>
+<li><strong>Aggregate analytics</strong> (number of conversations, response times, AI usage) for billing and reporting to the client</li>
+</ul>
+<p>We do <strong>not</strong> collect WhatsApp profile pictures, contact lists, location data, or any data outside the conversation thread itself.</p>
+
+<h2>How we use it</h2>
+<ul>
+<li>Deliver bot responses in real time</li>
+<li>Forward messages to Anthropic's Claude API for AI conversation processing (only the message text is sent — phone numbers are masked)</li>
+<li>Notify the client business owner of new orders, leads, and escalation requests</li>
+<li>Generate usage and revenue reports for the client</li>
+</ul>
+
+<h2>Where data is stored</h2>
+<p>Conversation data is stored in PostgreSQL (Neon, US-East region). Sensitive tokens (Shopify access tokens, third-party credentials) are encrypted at rest using AES-256-GCM. Backend infrastructure runs on Render.</p>
+
+<h2>Third parties we share data with</h2>
+<ul>
+<li><strong>Meta (WhatsApp Business Cloud API)</strong> — message delivery</li>
+<li><strong>Anthropic (Claude API)</strong> — AI processing of message text</li>
+<li><strong>Shopify</strong> — order lookup and webhook events for clients with connected stores</li>
+<li><strong>Google Sheets API</strong> — optional logging of leads and orders to client-owned sheets</li>
+<li><strong>Neon, Render, Upstash QStash</strong> — hosting and infrastructure</li>
+</ul>
+
+<h2>Data retention</h2>
+<p>Conversation history is automatically deleted <strong>24 months</strong> after the last activity, in line with Saudi Personal Data Protection Law (PDPL). Order events are retained for the same period. Aggregated analytics may be kept indefinitely in fully anonymized form.</p>
+
+<h2>End-customer rights (PDPL)</h2>
+<ul>
+<li><strong>Right to deletion</strong> — an end customer can request immediate deletion of all their data by messaging the client business or contacting us at <a href="mailto:hasanalsenanaaa@gmail.com">hasanalsenanaaa@gmail.com</a>. Deletion is processed within 7 days.</li>
+<li><strong>Right to access</strong> — request a copy of stored data via the same channel.</li>
+<li><strong>Right to object</strong> — opt out of automated processing by replying "stop" or "إيقاف" in any conversation.</li>
+</ul>
+
+<h2>Children</h2>
+<p>The service is not directed to anyone under 18. We do not knowingly collect data from minors.</p>
+
+<h2>Changes to this policy</h2>
+<p>We will update the "Last updated" date at the top whenever this policy changes. Material changes will be communicated to client businesses by email.</p>
+
+<h2>Contact</h2>
+<p>Privacy enquiries: <a href="mailto:hasanalsenanaaa@gmail.com">hasanalsenanaaa@gmail.com</a></p>
+`)));
+
+fastify.get('/terms', async (_req, reply) => reply.type('text/html').send(html('Terms of Service — Flowmation', `
+<h1>Terms of Service</h1>
+<p class="muted">Last updated: 3 May 2026</p>
+<p>These terms ("Terms") govern your use of Flowmation ("the Service"), provided by Hassan Abdulhakeem A Al Senan, registered freelance practitioner under the Saudi Ministry of Human Resource and Social Development (Authorized Document ID FL-848503968), based in Qatif, Saudi Arabia.</p>
+
+<h2>1. Service description</h2>
+<p>Flowmation provides software that automates customer-facing WhatsApp conversations on behalf of business clients. The Service connects to a client's WhatsApp Business Account through the official Meta WhatsApp Business Cloud API.</p>
+
+<h2>2. Eligibility</h2>
+<p>You must be at least 18 years old and the legal owner or authorized representative of the business connecting its WhatsApp account.</p>
+
+<h2>3. Acceptable use</h2>
+<p>You agree not to use the Service to:</p>
+<ul>
+<li>Send unsolicited bulk messages or spam</li>
+<li>Distribute illegal, harassing, deceptive, or fraudulent content</li>
+<li>Impersonate any person or business</li>
+<li>Reverse-engineer, scrape, or attempt unauthorized access to the Service</li>
+<li>Violate Meta's <a href="https://www.whatsapp.com/legal/business-policy/">WhatsApp Business Messaging Policy</a> or any applicable law</li>
+</ul>
+<p>Violation of this section may result in immediate suspension without refund.</p>
+
+<h2>4. Your responsibilities</h2>
+<ul>
+<li>Maintain accurate business information in your account</li>
+<li>Obtain consent from your end customers as required by Saudi PDPL and Meta's policies</li>
+<li>Respond to end-customer rights requests (deletion, access) we forward to you</li>
+<li>Keep your access credentials confidential</li>
+</ul>
+
+<h2>5. Pricing and billing</h2>
+<p>Pricing is set per individual client agreement. Where usage caps are part of an agreement, overages are billed monthly in arrears. We reserve the right to change list pricing with 30 days' notice; existing client agreements are honoured for the remainder of their term.</p>
+
+<h2>6. Service availability</h2>
+<p>We provide the Service on a best-effort basis. We do not guarantee uninterrupted availability and we are not liable for downtime caused by upstream providers (Meta, Anthropic, Shopify, Render, Neon).</p>
+
+<h2>7. Intellectual property</h2>
+<p>The Flowmation software, brand, and documentation remain our exclusive property. You retain ownership of all content sent through your WhatsApp account.</p>
+
+<h2>8. Limitation of liability</h2>
+<p>To the fullest extent permitted by law, Flowmation's total liability for any claim arising from the Service shall not exceed the fees you paid in the 3 months preceding the claim. We are not liable for indirect, incidental, or consequential damages, including lost profits or lost data.</p>
+
+<h2>9. Indemnification</h2>
+<p>You agree to indemnify and hold harmless Flowmation against any claim arising from your use of the Service in violation of these Terms or applicable law, including end-customer complaints about message content you authorized.</p>
+
+<h2>10. Termination</h2>
+<p>Either party may terminate the Service with 30 days' written notice. We may terminate immediately for material breach of section 3. Upon termination, your data is deleted within 30 days unless legally required to retain it.</p>
+
+<h2>11. Governing law</h2>
+<p>These Terms are governed by the laws of the Kingdom of Saudi Arabia. Disputes are subject to the exclusive jurisdiction of the courts of the Eastern Province.</p>
+
+<h2>12. Contact</h2>
+<p>Legal and contractual questions: <a href="mailto:hasanalsenanaaa@gmail.com">hasanalsenanaaa@gmail.com</a></p>
+`)));
 fastify.get('/health', async (_request, reply) => {
   const health = await getHealthStatus();
   const code = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
