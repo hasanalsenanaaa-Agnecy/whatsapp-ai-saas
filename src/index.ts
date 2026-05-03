@@ -2,7 +2,7 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import cors from '@fastify/cors';
-import { initDatabase, closeDatabase, getClientByPhoneNumberId, getClientById, getClientByVerifyToken, deleteCustomerData, validateDashboardKey, listConversations, getConversationDetail, listClients, listAlerts, getCustomerProfile } from './services/database.js';
+import { initDatabase, closeDatabase, getClientByPhoneNumberId, getClientById, getClientByVerifyToken, deleteCustomerData, validateDashboardKey, listConversations, getConversationDetail, listClients, listAlerts, getCustomerProfile, upsertClientFromEmbeddedSignup } from './services/database.js';
 import { initGoogleSheets } from './services/googleSheets.js';
 import { handleIncomingMessage } from './conversation.js';
 import { handleReminderCron } from './cron/reminders.js';
@@ -299,6 +299,91 @@ fastify.get('/privacy', async (_req, reply) => reply.type('text/html').send(html
 <p>Privacy enquiries: <a href="mailto:hasanalsenanaaa@gmail.com">hasanalsenanaaa@gmail.com</a></p>
 `)));
 
+// Embedded Signup landing — opens Meta's WhatsApp onboarding popup.
+// Requires FLOWMATION_APP_ID + META_EMBEDDED_SIGNUP_CONFIG_ID set in env.
+// Until Tech Provider is approved and a config is created, this page renders
+// a "coming soon" message instead of failing.
+fastify.get('/connect', async (_req, reply) => {
+  const appId = process.env.FLOWMATION_APP_ID;
+  const configId = process.env.META_EMBEDDED_SIGNUP_CONFIG_ID;
+  const ready = appId && configId;
+  const body = ready ? `
+<h1>Connect your WhatsApp Business number</h1>
+<p class="lead">Authorize Flowmation to send and receive messages on behalf of your business. The whole process takes about 2 minutes.</p>
+<button id="connect-btn" style="background:#16a34a;color:#fff;border:0;padding:14px 28px;font-size:16px;font-weight:600;border-radius:8px;cursor:pointer;margin:24px 0">Connect with WhatsApp</button>
+<div id="status" class="muted"></div>
+
+<h2>What you'll need</h2>
+<ul>
+<li>The Facebook account that owns your WhatsApp Business Account</li>
+<li>Permission to act on behalf of the business in Meta Business Manager</li>
+<li>Your WhatsApp Business phone number, ready to receive a 6-digit verification code</li>
+</ul>
+
+<h2>What we'll receive</h2>
+<ul>
+<li>A long-lived access token bound to your WhatsApp Business Account only</li>
+<li>Your business phone number ID and WhatsApp Business Account ID</li>
+<li><strong>Nothing else</strong> — we never see your Facebook profile, friends, or pages</li>
+</ul>
+
+<script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script>
+<script>
+window.fbAsyncInit = function() {
+  FB.init({ appId: '${appId}', cookie: true, xfbml: true, version: 'v23.0' });
+};
+
+// Capture phone_number_id + waba_id from Meta's postMessage events
+let signupData = {};
+window.addEventListener('message', (event) => {
+  if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') return;
+  try {
+    const d = JSON.parse(event.data);
+    if (d.type === 'WA_EMBEDDED_SIGNUP') signupData = d.data || {};
+  } catch (_) {}
+});
+
+document.getElementById('connect-btn').addEventListener('click', () => {
+  const status = document.getElementById('status');
+  status.textContent = 'Opening Meta...';
+  FB.login((response) => {
+    if (!response.authResponse || !response.authResponse.code) {
+      status.textContent = 'Cancelled. Try again when ready.';
+      return;
+    }
+    status.textContent = 'Finalizing connection...';
+    fetch('/api/embedded-signup/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        code: response.authResponse.code,
+        phone_number_id: signupData.phone_number_id,
+        waba_id: signupData.waba_id,
+      }),
+    }).then(r => r.json()).then(j => {
+      if (j.dashboard_url) {
+        status.textContent = '✓ Connected — redirecting to your dashboard...';
+        window.location.href = j.dashboard_url;
+      } else {
+        status.textContent = '⚠ ' + (j.error || 'Something went wrong. Email us.');
+      }
+    }).catch(() => { status.textContent = '⚠ Network error. Try again.'; });
+  }, {
+    config_id: '${configId}',
+    response_type: 'code',
+    override_default_response_type: true,
+  });
+});
+</script>
+` : `
+<h1>Connect your WhatsApp Business number</h1>
+<p class="lead">Self-service onboarding is launching shortly. We're finalizing approval from Meta as a verified Tech Provider so we can sign you up in under 2 minutes — no developer needed.</p>
+<p>For early access today, email <a href="mailto:hasanalsenanaaa@gmail.com">hasanalsenanaaa@gmail.com</a>.</p>
+<p class="muted">Status: pending Meta Tech Provider review (expected within 7 days).</p>
+`;
+  return reply.type('text/html').send(html('Connect WhatsApp — Flowmation', body));
+});
+
 fastify.get('/terms', async (_req, reply) => reply.type('text/html').send(html('Terms of Service — Flowmation', `
 <h1>Terms of Service</h1>
 <p class="muted">Last updated: 3 May 2026</p>
@@ -518,6 +603,66 @@ fastify.delete('/api/customer/:phone', async (request, reply) => {
   if (!phone || phone.length < 8) return reply.code(400).send({ error: 'valid phone number required' });
   const result = await deleteCustomerData(phone);
   return { success: true, deleted: result };
+});
+
+// Embedded Signup callback — exchanges Meta's temp code for a permanent
+// system-user access token, subscribes our App to the WABA's webhooks, and
+// upserts the client row. Called by /connect after the user completes the
+// Meta popup. Rate-limited to prevent code-replay abuse.
+fastify.post('/api/embedded-signup/exchange', {
+  config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+}, async (request, reply) => {
+  const body = (request.body || {}) as { code?: string; phone_number_id?: string; waba_id?: string };
+  if (!body.code || !body.phone_number_id || !body.waba_id) {
+    return reply.code(400).send({ error: 'code, phone_number_id, and waba_id are required' });
+  }
+
+  const appId = process.env.FLOWMATION_APP_ID;
+  const appSecret = process.env.FLOWMATION_APP_SECRET;
+  if (!appId || !appSecret) {
+    return reply.code(503).send({ error: 'Embedded Signup not configured (missing FLOWMATION_APP_ID/SECRET)' });
+  }
+
+  // Step 1: exchange code → permanent access token
+  let accessToken: string;
+  try {
+    const exchangeUrl = `https://graph.facebook.com/v23.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${encodeURIComponent(body.code)}`;
+    const res = await fetch(exchangeUrl, { method: 'GET' });
+    const json = await res.json() as { access_token?: string; error?: { message: string } };
+    if (!json.access_token) {
+      console.error('Token exchange failed:', json);
+      return reply.code(502).send({ error: json.error?.message || 'Token exchange failed' });
+    }
+    accessToken = json.access_token;
+  } catch (e) {
+    console.error('Token exchange error:', e);
+    return reply.code(502).send({ error: 'Could not reach Meta to exchange code' });
+  }
+
+  // Step 2: subscribe our app to receive webhooks for this WABA
+  try {
+    await fetch(`https://graph.facebook.com/v23.0/${body.waba_id}/subscribed_apps`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch (e) {
+    console.error('subscribed_apps error (continuing):', e);
+  }
+
+  // Step 3: upsert client row + return dashboard URL
+  try {
+    const { clientId, dashboardKey, isNew } = await upsertClientFromEmbeddedSignup({
+      phoneNumberId: body.phone_number_id,
+      accessToken,
+      wabaId: body.waba_id,
+    });
+    console.log(`Embedded Signup ${isNew ? 'created' : 'updated'} client ${clientId}`);
+    const dashboardUrl = `/dashboard?key=${dashboardKey}`;
+    return reply.send({ ok: true, client_id: clientId, dashboard_url: dashboardUrl, is_new: isNew });
+  } catch (e) {
+    console.error('Client upsert error:', e);
+    return reply.code(500).send({ error: 'Could not save client. Please contact support.' });
+  }
 });
 
 // WhatsApp webhook verification

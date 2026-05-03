@@ -1,4 +1,5 @@
 import postgres from 'postgres';
+import crypto from 'node:crypto';
 import { DEFAULT_FEATURES, type ClientConfig, type ClientFeatures, type ClientSettings, type KnowledgeItem, type ClientQuestion } from '../types/client.js';
 import { decryptSettings } from '../utils/crypto.js';
 
@@ -102,6 +103,49 @@ export async function getClientByVerifyToken(token: string): Promise<ClientConfi
     const rows = await sql`SELECT * FROM clients WHERE verify_token = ${token} AND active = true LIMIT 1`;
     return rows[0] ? parseClientRow(rows[0]) : null;
   } catch (error) { console.error('❌ DB error:', error); return null; }
+}
+
+// Upsert a client row created from Meta Embedded Signup. Reuses an existing
+// row if phone_number_id matches (refresh of token); otherwise inserts a new
+// inactive row that the operator activates after wiring Shopify + agent phone.
+// Returns { clientId, dashboardKey, isNew } so the caller can route the user
+// to the right portal URL.
+export async function upsertClientFromEmbeddedSignup(args: {
+  phoneNumberId: string;
+  accessToken: string;
+  wabaId: string;
+}): Promise<{ clientId: string; dashboardKey: string; isNew: boolean }> {
+  const { phoneNumberId, accessToken, wabaId } = args;
+  const existing = await sql`SELECT id, dashboard_key FROM clients WHERE phone_number_id = ${phoneNumberId} LIMIT 1`;
+
+  if (existing[0]) {
+    const dashboardKey = existing[0].dashboard_key || crypto.randomBytes(16).toString('hex');
+    await sql`
+      UPDATE clients SET
+        access_token = ${accessToken},
+        dashboard_key = ${dashboardKey},
+        settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{waba_id}', ${JSON.stringify(wabaId)}::jsonb)
+      WHERE id = ${existing[0].id}
+    `;
+    return { clientId: existing[0].id, dashboardKey, isNew: false };
+  }
+
+  const clientId = 'client_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now().toString(36);
+  const verifyToken = 'verify_' + crypto.randomBytes(8).toString('hex');
+  const dashboardKey = crypto.randomBytes(16).toString('hex');
+  const settings = { waba_id: wabaId };
+  const features = { ai_fallback: true, lead_scoring: true, handover_detection: true, appointment_setting: false, ai_conversation: false };
+
+  await sql`
+    INSERT INTO clients (
+      id, name, industry, phone_number_id, access_token, verify_token,
+      agent_phones, settings, features, questions, messages, active, dashboard_key, created_at
+    ) VALUES (
+      ${clientId}, 'Pending setup', 'ecommerce', ${phoneNumberId}, ${accessToken}, ${verifyToken},
+      ${[]}, ${JSON.stringify(settings)}, ${JSON.stringify(features)}, '[]', '{}', false, ${dashboardKey}, NOW()
+    )
+  `;
+  return { clientId, dashboardKey, isNew: true };
 }
 
 // ============================================================
